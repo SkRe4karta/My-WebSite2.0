@@ -68,7 +68,8 @@ log_info "Шаг 1/5: Настройка переменных окружения
 if [ ! -f .env ]; then
     if [ -f setup-env.sh ]; then
         chmod +x setup-env.sh
-        if echo "" | ./setup-env.sh; then
+        # Используем --no-hash для пропуска генерации хеша (будет сгенерирован позже через Docker)
+        if echo "" | ./setup-env.sh --no-hash; then
             log_success "Файл .env создан"
     else
             error_exit "Не удалось создать .env файл"
