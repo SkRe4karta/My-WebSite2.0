@@ -95,6 +95,17 @@ mkdir -p database storage/uploads storage/vault || error_exit "Не удалос
 mkdir -p certbot/www certbot/conf certbot/logs || error_exit "Не удалось создать директории certbot"
 log_success "Директории созданы"
 
+# Обеспечение создания базы данных
+log_info "Проверка базы данных..."
+if [ ! -f "database/db.sqlite" ]; then
+    log_info "База данных не найдена, будет создана при выполнении миграций"
+    # Создаем пустой файл, чтобы Prisma мог его использовать
+    touch database/db.sqlite || log_warning "Не удалось создать файл базы данных (будет создан автоматически)"
+    chmod 666 database/db.sqlite 2>/dev/null || true
+else
+    log_success "База данных уже существует"
+fi
+
 # Остановка существующих контейнеров
 log_info "Остановка существующих контейнеров..."
 if docker-compose ps -q &> /dev/null || docker compose ps -q &> /dev/null; then
@@ -152,12 +163,40 @@ fi
 
 # Выполнение миграций
 log_info "Выполнение миграций базы данных..."
-if docker compose exec -T web npm run db:migrate &> /dev/null 2>&1; then
-    docker compose exec -T web npm run db:migrate 2>&1 | grep -v "already applied" || log_info "Миграции применены"
+# Убеждаемся, что директория базы данных существует и имеет правильные права
+chmod 755 database 2>/dev/null || true
+
+# Выполняем миграции (Prisma автоматически создаст базу данных, если её нет)
+log_info "Применение миграций базы данных..."
+if docker compose exec -T web npm run db:migrate 2>&1; then
+    log_success "Миграции применены успешно"
 else
-    docker-compose exec -T web npm run db:migrate 2>&1 | grep -v "already applied" || log_info "Миграции применены"
+    log_warning "Ошибка при применении миграций, пробуем альтернативный способ..."
+    if docker-compose exec -T web npm run db:migrate 2>&1; then
+        log_success "Миграции применены успешно"
+    else
+        log_error "Не удалось применить миграции. Проверьте логи: docker-compose logs web"
+    fi
 fi
-log_success "Миграции выполнены"
+
+# Проверяем, что база данных создана
+sleep 2
+if [ -f "database/db.sqlite" ]; then
+    log_success "База данных создана и миграции выполнены"
+    # Устанавливаем правильные права на файл базы данных
+    chmod 666 database/db.sqlite 2>/dev/null || true
+    
+    # Создание/обновление администратора
+    log_info "Инициализация администратора..."
+    if docker compose exec -T web npm run db:init-admin &> /dev/null 2>&1; then
+        docker compose exec -T web npm run db:init-admin 2>&1 | grep -v "^$" || log_info "Администратор готов"
+    else
+        docker-compose exec -T web npm run db:init-admin 2>&1 | grep -v "^$" || log_info "Администратор готов"
+    fi
+    log_success "Администратор инициализирован"
+else
+    log_warning "База данных может быть не создана, проверьте логи: docker-compose logs web"
+fi
 
 # Проверка статуса
 echo ""

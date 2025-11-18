@@ -26,7 +26,8 @@ export async function ensureAdminUser() {
     throw new Error("ADMIN_PASSWORD_HASH должен быть задан в .env файле. Перезапустите dev-сервер после создания .env");
   }
 
-  const name = process.env.ADMIN_NAME ?? process.env.ADMIN_USERNAME ?? "admin";
+  // Используем ADMIN_USERNAME как name для входа по логину
+  const name = process.env.ADMIN_NAME ?? process.env.ADMIN_USERNAME ?? "skre4karta";
   const username = process.env.ADMIN_USERNAME ?? "skre4karta";
 
   try {

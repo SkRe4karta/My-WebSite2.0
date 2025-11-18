@@ -11,11 +11,24 @@ EMAIL="zelyonkin.d@gmail.com"
 echo "🔒 Настройка SSL сертификата для $DOMAIN"
 echo ""
 
-# Проверка, что контейнеры запущены
-if ! docker-compose ps | grep -q "portfolio_nginx.*Up"; then
-    echo "❌ Nginx контейнер не запущен!"
+# Проверка, что web контейнер запущен
+if ! docker-compose ps | grep -q "portfolio_web.*Up"; then
+    echo "❌ Web контейнер не запущен!"
     echo "   Сначала запустите: ./deploy.sh"
     exit 1
+fi
+
+# Проверка, что nginx.conf не содержит активный HTTPS блок
+if grep -q "^[[:space:]]*listen[[:space:]]*443[[:space:]]*ssl" nginx.conf 2>/dev/null; then
+    echo "⚠️  ВНИМАНИЕ: В nginx.conf найден активный HTTPS блок!"
+    echo "   Nginx должен работать на HTTP (порт 80) для получения сертификата."
+    echo "   Убедитесь, что HTTPS блок закомментирован в nginx.conf"
+    echo ""
+    read -p "Продолжить? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
 fi
 
 # Остановка nginx для получения сертификата
@@ -24,14 +37,14 @@ docker-compose stop nginx
 
 # Получение сертификата
 echo "📜 Получение SSL сертификата от Let's Encrypt..."
-docker-compose run --rm certbot certonly \
+docker-compose run --rm --entrypoint "" certbot sh -c "certbot certonly \
     --standalone \
     --preferred-challenges http \
-    -d "$DOMAIN" \
-    -d "www.$DOMAIN" \
-    --email "$EMAIL" \
+    -d $DOMAIN \
+    -d www.$DOMAIN \
+    --email $EMAIL \
     --agree-tos \
-    --non-interactive
+    --non-interactive"
 
 # Запуск nginx обратно
 echo "▶️  Запуск Nginx..."

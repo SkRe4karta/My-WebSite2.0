@@ -5,6 +5,36 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.0.0/),
 и проект придерживается [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [2.2.1] - 2025-01-18
+
+### Добавлено
+- **Управление пользователями:** Полный CRUD интерфейс в настройках админки
+- **API для пользователей:** `/api/users` (GET, POST) и `/api/users/[id]` (PUT, DELETE)
+- **Диагностические скрипты:**
+  - `npm run db:test-login` - тестирование входа
+  - `npm run db:check-auth` - проверка настроек аутентификации
+  - `npm run db:fix-user` - исправление пользователя
+  - `npm run db:force-fix-user` - принудительное исправление с генерацией хеша
+- **Автоматическое создание администратора:** После миграций БД
+- **Компонент UserManagement:** UI для управления пользователями в настройках
+- **Документация:** `DEPLOY-UPDATE.md` и `DIAGNOSE-LOGIN.md`
+
+### Изменено
+- **Аутентификация NextAuth:** 
+  - Убрана привязка к одному пользователю (ADMIN_USERNAME)
+  - Поддержка входа по email или name для всех пользователей
+  - Убран PrismaAdapter при JWT strategy (исправлен конфликт)
+  - Улучшена конфигурация сессий и cookies
+- **Миграции БД:** Изменен `db:migrate` на `prisma migrate deploy` для продакшена
+- **Инициализация администратора:** Правильное сохранение name (skre4karta)
+- **Скрипты установки:** Автоматическое создание администратора после миграций
+
+### Исправлено
+- **Проблема с входом:** Исправлена логика поиска пользователя по email/name
+- **Создание сессий:** Исправлен session callback для получения актуальных данных из БД
+- **Миграции:** Улучшена обработка ошибок в install.sh и deploy.sh
+- **Пароли:** Автоматическая миграция plain text паролей в bcrypt при входе
+
 ## [2.2.0] - 2025-01-XX
 
 ### Добавлено
@@ -79,6 +109,7 @@
 - Базовая аутентификация
 - Развертывание на Docker + Nginx
 
+[2.2.1]: https://github.com/SkRe4karta/My_WebSite/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/SkRe4karta/My_WebSite/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/SkRe4karta/My_WebSite/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/SkRe4karta/My_WebSite/compare/v1.0.0...v2.0.0

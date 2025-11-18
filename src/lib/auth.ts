@@ -1,6 +1,7 @@
 import NextAuth from "next-auth/next";
 import Credentials from "next-auth/providers/credentials";
-import { PrismaAdapter } from "@auth/prisma-adapter";
+// PrismaAdapter не используется при JWT strategy
+// import { PrismaAdapter } from "@auth/prisma-adapter";
 import type { AdapterUser } from "next-auth/adapters";
 import type { Session, NextAuthOptions } from "next-auth";
 import type { JWT } from "next-auth/jwt";
@@ -12,9 +13,11 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "zelyonkin.d@gmail.com";
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME ?? "skre4karta";
 
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma),
+  // Не используем PrismaAdapter при JWT strategy - он нужен только для database sessions
+  // adapter: PrismaAdapter(prisma),
   session: {
     strategy: "jwt" as const,
+    maxAge: 30 * 24 * 60 * 60, // 30 дней
   },
   pages: {
     signIn: "/login",
@@ -23,7 +26,7 @@ export const authOptions: NextAuthOptions = {
     Credentials({
       name: "Credentials",
       credentials: {
-        username: { label: "Логин", type: "text", value: ADMIN_USERNAME },
+        username: { label: "Логин или Email", type: "text", placeholder: "Введите логин или email" },
         password: { label: "Пароль", type: "password" },
         totpCode: { label: "Код 2FA", type: "text" },
       },
@@ -56,23 +59,36 @@ export const authOptions: NextAuthOptions = {
             throw new Error("Введите логин и пароль");
           }
 
-          if (credentials.username !== ADMIN_USERNAME) {
-            console.error(`Invalid username: ${credentials.username}, expected: ${ADMIN_USERNAME}`);
+          // Ищем пользователя по email или name (username может быть любым из них)
+          const usernameOrEmail = credentials.username.trim();
+          console.log(`🔍 Поиск пользователя: "${usernameOrEmail}"`);
+          
+          const user = await prisma.user.findFirst({
+            where: {
+              OR: [
+                { email: usernameOrEmail },
+                { name: usernameOrEmail },
+              ],
+            },
+          });
+
+          if (!user) {
+            console.error(`❌ User not found: ${usernameOrEmail}`);
+            // Выводим список всех пользователей для отладки
+            const allUsers = await prisma.user.findMany({
+              select: { email: true, name: true },
+            });
+            console.log(`📋 Доступные пользователи:`, allUsers);
             recordFailedAttempt(clientIP);
             await logAudit("login_failed", {
               ipAddress: clientIP,
               userAgent,
-              details: { reason: "invalid_username", attemptedUsername: credentials.username },
+              details: { reason: "invalid_username", attemptedUsername: usernameOrEmail },
             });
-            throw new Error("Неверный логин");
+            throw new Error("Неверный логин или пользователь не найден");
           }
 
-          const admin = await ensureAdminUser();
-          if (!admin) {
-            console.error("Admin user not found");
-            recordFailedAttempt(clientIP);
-            throw new Error("Пользователь не найден");
-          }
+          console.log(`✅ Пользователь найден: ${user.email} (name: ${user.name || 'не задано'})`);
 
           const enteredPassword = credentials.password?.trim();
           
@@ -87,19 +103,19 @@ export const authOptions: NextAuthOptions = {
           let passwordValid = false;
           
           // Проверяем, хеширован ли пароль в БД
-          if (isBcryptHash(admin.passwordHash)) {
+          if (isBcryptHash(user.passwordHash)) {
             // Пароль хеширован, используем bcrypt для проверки
-            passwordValid = await verifyPassword(enteredPassword, admin.passwordHash);
+            passwordValid = await verifyPassword(enteredPassword, user.passwordHash);
           } else {
             // Старый формат (plain text) - для обратной совместимости
             // Мигрируем пароль в хеш при следующем входе
-            passwordValid = enteredPassword === admin.passwordHash;
+            passwordValid = enteredPassword === user.passwordHash;
             
             // Если пароль верный, мигрируем его в хеш
             if (passwordValid) {
               const hashedPassword = await hashPassword(enteredPassword);
               await prisma.user.update({
-                where: { id: admin.id },
+                where: { id: user.id },
                 data: { passwordHash: hashedPassword },
               });
               console.log("✅ Пароль мигрирован в хеш");
@@ -110,9 +126,12 @@ export const authOptions: NextAuthOptions = {
           
           if (!passwordValid) {
             console.error("❌ Invalid password");
+            console.error(`   Введенный пароль: "${enteredPassword}"`);
+            console.error(`   Хеш в БД: ${user.passwordHash.substring(0, 20)}...`);
+            console.error(`   Хеш bcrypt: ${isBcryptHash(user.passwordHash) ? 'Да' : 'Нет'}`);
             recordFailedAttempt(clientIP);
             await logAudit("login_failed", {
-              userId: admin.id,
+              userId: user.id,
               ipAddress: clientIP,
               userAgent,
               details: { reason: "invalid_password" },
@@ -121,7 +140,7 @@ export const authOptions: NextAuthOptions = {
           }
 
           // Проверяем 2FA, если включен
-          if (admin.totpSecret && !admin.totpSecret.startsWith("temp:")) {
+          if (user.totpSecret && !user.totpSecret.startsWith("temp:")) {
             const totpCode = (credentials as any).totpCode;
             
             if (!totpCode) {
@@ -131,12 +150,12 @@ export const authOptions: NextAuthOptions = {
 
             // Проверяем TOTP код
             const { verifyTOTP } = await import("./totp");
-            const isValid = verifyTOTP(admin.totpSecret, totpCode);
+            const isValid = verifyTOTP(user.totpSecret, totpCode);
 
             // Если TOTP неверен, проверяем резервные коды
             if (!isValid) {
               const settings = await prisma.userSetting.findUnique({
-                where: { userId: admin.id },
+                where: { userId: user.id },
               });
 
               // Используем type assertion, так как Prisma Client может быть не обновлён
@@ -151,13 +170,13 @@ export const authOptions: NextAuthOptions = {
                     // Удаляем использованный резервный код
                     backupCodes.splice(codeIndex, 1);
                     await prisma.userSetting.update({
-                      where: { userId: admin.id },
+                      where: { userId: user.id },
                       data: { backupCodes: JSON.stringify(backupCodes) } as any,
                     });
                   } else {
                     recordFailedAttempt(clientIP);
                     await logAudit("login_failed", {
-                      userId: admin.id,
+                      userId: user.id,
                       ipAddress: clientIP,
                       userAgent,
                       details: { reason: "invalid_2fa_code_or_backup" },
@@ -167,7 +186,7 @@ export const authOptions: NextAuthOptions = {
                 } catch {
                   recordFailedAttempt(clientIP);
                   await logAudit("login_failed", {
-                    userId: admin.id,
+                    userId: user.id,
                     ipAddress: clientIP,
                     userAgent,
                     details: { reason: "invalid_2fa_code_or_backup_parse_error" },
@@ -177,7 +196,7 @@ export const authOptions: NextAuthOptions = {
               } else {
                 recordFailedAttempt(clientIP);
                 await logAudit("login_failed", {
-                  userId: admin.id,
+                  userId: user.id,
                   ipAddress: clientIP,
                   userAgent,
                   details: { reason: "invalid_2fa_code_no_backup_codes" },
@@ -192,18 +211,27 @@ export const authOptions: NextAuthOptions = {
           
           // Логируем успешный вход
           await logAudit("login", {
-            userId: admin.id,
+            userId: user.id,
             ipAddress: clientIP,
             userAgent,
-            details: { has2FA: !!(admin.totpSecret && !admin.totpSecret.startsWith("temp:")) },
+            details: { has2FA: !!(user.totpSecret && !user.totpSecret.startsWith("temp:")) },
           });
 
-          return {
-            id: admin.id,
-            email: admin.email,
-            name: admin.name ?? ADMIN_USERNAME,
-            role: admin.role,
+          const userData = {
+            id: user.id,
+            email: user.email,
+            name: user.name ?? user.email,
+            role: user.role,
           };
+          
+          console.log(`✅ Авторизация успешна:`, {
+            id: userData.id,
+            email: userData.email,
+            name: userData.name,
+            role: userData.role,
+          });
+          
+          return userData;
         } catch (error) {
           console.error("Authorization error:", error);
           if (error instanceof Error) {
@@ -226,13 +254,42 @@ export const authOptions: NextAuthOptions = {
     },
     async session({ session, token }: { session: Session; token: JWT }) {
       if (token?.id) {
-        session.user = {
-          ...(session.user ?? {}),
-          id: token.id as string,
-          role: (token.role as string) ?? "admin",
-          email: (token as JWT & { email?: string }).email ?? session.user?.email ?? ADMIN_EMAIL,
-          name: ADMIN_USERNAME,
-        };
+        // Получаем актуальные данные пользователя из БД
+        try {
+          const user = await prisma.user.findUnique({
+            where: { id: token.id as string },
+            select: { email: true, name: true, role: true },
+          });
+          
+          if (user) {
+            session.user = {
+              ...(session.user ?? {}),
+              id: token.id as string,
+              role: user.role ?? "admin",
+              email: user.email,
+              name: user.name ?? user.email,
+            };
+          } else {
+            // Fallback на старые данные из token
+            session.user = {
+              ...(session.user ?? {}),
+              id: token.id as string,
+              role: (token.role as string) ?? "admin",
+              email: (token as JWT & { email?: string }).email ?? session.user?.email ?? ADMIN_EMAIL,
+              name: (token as JWT & { username?: string }).username ?? ADMIN_USERNAME,
+            };
+          }
+        } catch (error) {
+          console.error("Error fetching user in session callback:", error);
+          // Fallback на данные из token
+          session.user = {
+            ...(session.user ?? {}),
+            id: token.id as string,
+            role: (token.role as string) ?? "admin",
+            email: (token as JWT & { email?: string }).email ?? session.user?.email ?? ADMIN_EMAIL,
+            name: (token as JWT & { username?: string }).username ?? ADMIN_USERNAME,
+          };
+        }
       }
       return session;
     },
@@ -248,6 +305,21 @@ export const authOptions: NextAuthOptions = {
   },
   trustHost: true,
   secret: process.env.NEXTAUTH_SECRET,
+  // Исправляем URL для работы через прокси
+  useSecureCookies: process.env.NEXTAUTH_URL?.startsWith("https://") ?? false,
+  cookies: {
+    sessionToken: {
+      name: process.env.NODE_ENV === "production" 
+        ? "__Secure-next-auth.session-token" 
+        : "next-auth.session-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: process.env.NEXTAUTH_URL?.startsWith("https://") ?? false,
+      },
+    },
+  },
 };
 
 export const { handlers: authHandlers, auth, signIn, signOut } = NextAuth(authOptions);

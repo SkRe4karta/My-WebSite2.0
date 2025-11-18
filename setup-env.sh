@@ -34,10 +34,25 @@ NEXTAUTH_SECRET=$(openssl rand -base64 32 2>/dev/null || echo "change-me-$(date 
 VAULT_KEY=$(openssl rand -base64 32 2>/dev/null || echo "change-me-$(date +%s)")
 STORAGE_SALT=$(openssl rand -base64 16 2>/dev/null || echo "change-me-$(date +%s)")
 
+# Определяем NEXTAUTH_URL
+# В продакшене через nginx используем домен, в разработке - localhost
+if [ -n "${NEXTAUTH_URL:-}" ]; then
+    # Если уже задан, используем его
+    NEXT_AUTH_URL_VALUE="$NEXTAUTH_URL"
+elif [ "$NODE_ENV" = "production" ] || [ -f "docker-compose.yml" ]; then
+    # В продакшене используем домен (можно изменить после настройки SSL)
+    NEXT_AUTH_URL_VALUE="http://zelyonkin.ru"
+else
+    # В разработке используем localhost
+    NEXT_AUTH_URL_VALUE="http://localhost:3000"
+fi
+
 # Создание .env файла
 cat > .env << EOF
 # NextAuth Configuration
-NEXTAUTH_URL=https://zelyonkin.ru
+# NEXTAUTH_URL автоматически определяется, но можно изменить вручную
+# После настройки SSL измените на: NEXTAUTH_URL=https://zelyonkin.ru
+NEXTAUTH_URL=$NEXT_AUTH_URL_VALUE
 NEXTAUTH_SECRET=$NEXTAUTH_SECRET
 
 # Admin Credentials

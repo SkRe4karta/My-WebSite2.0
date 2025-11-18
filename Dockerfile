@@ -51,6 +51,16 @@ RUN chmod -R +x node_modules/.bin 2>/dev/null || true
 # Copy application source code
 COPY . .
 
+# Проверяем наличие скриптов (для отладки)
+RUN if [ -d "scripts" ]; then \
+        echo "✅ scripts directory found"; \
+        ls -la scripts/ || true; \
+        chmod +x scripts/*.js 2>/dev/null || true; \
+    else \
+        echo "⚠️  WARNING: scripts directory not found!"; \
+        mkdir -p scripts; \
+    fi
+
 # Build environment variables
 ENV DATABASE_URL="file:./database/db.sqlite"
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -84,6 +94,19 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
+
+# Копируем скрипты (обязательно для работы npm run db:init-admin)
+COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
+
+# Проверяем, что скрипты скопированы
+RUN if [ -f "scripts/init-admin.js" ] && [ -f "scripts/check-auth.js" ]; then \
+        echo "✅ Скрипты успешно скопированы"; \
+        chmod +x scripts/*.js; \
+    else \
+        echo "❌ ОШИБКА: Скрипты не найдены!"; \
+        ls -la scripts/ 2>/dev/null || echo "Директория scripts не существует"; \
+        exit 1; \
+    fi
 
 # Switch to non-root user
 USER nextjs

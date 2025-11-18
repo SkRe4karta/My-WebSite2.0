@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import TwoFactorAuth from "./TwoFactorAuth";
+import UserManagement from "./UserManagement";
 
 type Settings = {
   enableAnimations?: boolean;
@@ -150,9 +151,10 @@ export default function SettingsPanel() {
         </div>
       </div>
       
-      {/* Правая колонка - Двухфакторка */}
-      <div>
+      {/* Правая колонка - Двухфакторка и Управление пользователями */}
+      <div className="space-y-6">
         <TwoFactorAuth />
+        <UserManagement />
       </div>
     </div>
   );
