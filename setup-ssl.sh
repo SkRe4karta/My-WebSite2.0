@@ -68,6 +68,13 @@ SUCCESS=false
 while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ "$SUCCESS" = false ]; do
     echo "   Попытка $ATTEMPT из $MAX_ATTEMPTS..."
     
+    # Проверяем, существует ли уже сертификат
+    FORCE_RENEWAL=""
+    if [ -f "certbot/live/$DOMAIN/fullchain.pem" ]; then
+        FORCE_RENEWAL="--force-renewal"
+        echo "   (Обновление существующего сертификата)"
+    fi
+    
     if docker-compose run --rm --entrypoint "" certbot sh -c "certbot certonly \
         --webroot \
         --webroot-path /var/www/certbot \
@@ -77,7 +84,7 @@ while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ "$SUCCESS" = false ]; do
         --email $EMAIL \
         --agree-tos \
         --non-interactive \
-        --force-renewal" 2>&1; then
+        $FORCE_RENEWAL" 2>&1; then
         SUCCESS=true
         echo "   ✅ Сертификат получен успешно!"
     else
