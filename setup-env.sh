@@ -10,23 +10,66 @@ echo "🔧 Настройка переменных окружения..."
 # Пароль по умолчанию для релизной версии
 DEFAULT_PASSWORD="1234"
 
-# Проверка наличия Node.js для генерации хэша пароля
-if ! command -v node &> /dev/null; then
-    echo "⚠️  Node.js не найден. Установите Node.js для генерации хэша пароля."
-    echo "   Или сгенерируйте хэш вручную: node -e \"console.log(require('bcryptjs').hashSync('пароль', 10))\""
-    PASSWORD_HASH=""
-else
-    echo "Введите пароль для админки (по умолчанию: $DEFAULT_PASSWORD, нажмите Enter для использования):"
-    read -s ADMIN_PASSWORD
+# Запрашиваем пароль
+echo "Введите пароль для админки (по умолчанию: $DEFAULT_PASSWORD, нажмите Enter для использования):"
+read -s ADMIN_PASSWORD
+
+# Если пароль не введён, используем пароль по умолчанию
+if [ -z "$ADMIN_PASSWORD" ]; then
+    ADMIN_PASSWORD="$DEFAULT_PASSWORD"
+    echo "Используется пароль по умолчанию: $DEFAULT_PASSWORD"
+    echo "⚠️  ВАЖНО: После первого входа обязательно смените пароль в настройках админки!"
+fi
+
+# Генерация хеша пароля
+# Пробуем разные способы генерации хеша
+PASSWORD_HASH=""
+
+# Способ 1: Используем Docker контейнер (если доступен)
+if command -v docker &> /dev/null; then
+    echo "🔐 Генерация хеша пароля через Docker..."
+    # Используем простую команду с установкой bcryptjs в контейнере
+    PASSWORD_HASH=$(docker run --rm -e PASSWORD="$ADMIN_PASSWORD" node:20-slim sh -c "
+        npm install bcryptjs 2>/dev/null && \
+        node -e \"const bcrypt = require('bcryptjs'); bcrypt.hashSync(process.env.PASSWORD, 10, (err, hash) => { if (err) process.exit(1); console.log(hash); })\"
+    " 2>/dev/null | tail -1 || echo "")
     
-    # Если пароль не введён, используем пароль по умолчанию
-    if [ -z "$ADMIN_PASSWORD" ]; then
-        ADMIN_PASSWORD="$DEFAULT_PASSWORD"
-        echo "Используется пароль по умолчанию: $DEFAULT_PASSWORD"
-        echo "⚠️  ВАЖНО: После первого входа обязательно смените пароль в настройках админки!"
+    # Если не получилось, пробуем синхронный вариант
+    if [ -z "$PASSWORD_HASH" ]; then
+        PASSWORD_HASH=$(docker run --rm node:20-slim sh -c "
+            npm install bcryptjs 2>/dev/null && \
+            node -e \"const bcrypt = require('bcryptjs'); console.log(bcrypt.hashSync('$ADMIN_PASSWORD', 10))\"
+        " 2>/dev/null | tail -1 || echo "")
     fi
-    
-    PASSWORD_HASH=$(node -e "const bcrypt = require('bcryptjs'); console.log(bcrypt.hashSync('$ADMIN_PASSWORD', 10))" 2>/dev/null || echo "")
+fi
+
+# Способ 2: Используем локальный Node.js (если доступен)
+if [ -z "$PASSWORD_HASH" ] && command -v node &> /dev/null; then
+    echo "🔐 Генерация хеша пароля через Node.js..."
+    # Проверяем, установлен ли bcryptjs
+    if node -e "require('bcryptjs')" &> /dev/null; then
+        PASSWORD_HASH=$(node -e "const bcrypt = require('bcryptjs'); bcrypt.hashSync('$ADMIN_PASSWORD', 10)" 2>/dev/null || echo "")
+    else
+        # Пробуем установить bcryptjs глобально или использовать npx
+        PASSWORD_HASH=$(npx -y bcryptjs-cli hash "$ADMIN_PASSWORD" 2>/dev/null | tail -1 || echo "")
+    fi
+fi
+
+# Способ 3: Используем Python (если доступен)
+if [ -z "$PASSWORD_HASH" ] && command -v python3 &> /dev/null; then
+    echo "🔐 Генерация хеша пароля через Python..."
+    PASSWORD_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw('$ADMIN_PASSWORD'.encode('utf-8'), bcrypt.gensalt(rounds=10)).decode('utf-8'))" 2>/dev/null || echo "")
+fi
+
+# Если хеш не сгенерирован, предупреждаем
+if [ -z "$PASSWORD_HASH" ]; then
+    echo ""
+    echo "⚠️  Не удалось сгенерировать хеш пароля автоматически."
+    echo "   Хеш будет сгенерирован автоматически при установке через Docker."
+    echo "   Или выполните вручную:"
+    echo "   ./generate-password-hash.sh"
+    echo "   И добавьте результат в .env файл"
+    PASSWORD_HASH=""
 fi
 
 # Генерация секретов

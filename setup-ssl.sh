@@ -18,11 +18,27 @@ if ! docker-compose ps | grep -q "portfolio_web.*Up"; then
     exit 1
 fi
 
-# Проверка, что nginx.conf не содержит активный HTTPS блок
-if grep -q "^[[:space:]]*listen[[:space:]]*443[[:space:]]*ssl" nginx.conf 2>/dev/null; then
-    echo "⚠️  ВНИМАНИЕ: В nginx.conf найден активный HTTPS блок!"
-    echo "   Nginx должен работать на HTTP (порт 80) для получения сертификата."
-    echo "   Убедитесь, что HTTPS блок закомментирован в nginx.conf"
+# Проверка, что nginx запущен
+if ! docker-compose ps | grep -q "portfolio_nginx.*Up"; then
+    echo "⚠️  Nginx не запущен. Запускаем..."
+    docker-compose up -d nginx
+    sleep 5
+fi
+
+# Проверка, что директория для webroot существует
+if [ ! -d "certbot/www" ]; then
+    echo "📁 Создание директории для webroot..."
+    mkdir -p certbot/www
+    chmod 755 certbot/www
+fi
+
+# Проверка, что nginx.conf правильно настроен для acme-challenge
+if ! grep -q "location /.well-known/acme-challenge/" nginx.conf; then
+    echo "⚠️  ВНИМАНИЕ: В nginx.conf не найден location для /.well-known/acme-challenge/"
+    echo "   Убедитесь, что nginx.conf содержит:"
+    echo "   location /.well-known/acme-challenge/ {"
+    echo "     root /var/www/certbot;"
+    echo "   }"
     echo ""
     read -p "Продолжить? (y/n) " -n 1 -r
     echo
@@ -31,27 +47,52 @@ if grep -q "^[[:space:]]*listen[[:space:]]*443[[:space:]]*ssl" nginx.conf 2>/dev
     fi
 fi
 
-# Остановка nginx для получения сертификата
-echo "🛑 Временная остановка Nginx..."
-docker-compose stop nginx
+# Проверка доступности порта 80
+echo "🔍 Проверка доступности порта 80..."
+if ! curl -sf http://localhost/.well-known/acme-challenge/test &> /dev/null; then
+    echo "⚠️  Порт 80 может быть недоступен. Проверьте:"
+    echo "   - Nginx запущен: docker-compose ps nginx"
+    echo "   - Порты открыты: sudo ufw status"
+fi
 
-# Получение сертификата
-echo "📜 Получение SSL сертификата от Let's Encrypt..."
-docker-compose run --rm --entrypoint "" certbot sh -c "certbot certonly \
-    --standalone \
-    --preferred-challenges http \
-    -d $DOMAIN \
-    -d www.$DOMAIN \
-    --email $EMAIL \
-    --agree-tos \
-    --non-interactive"
+# Получение сертификата через webroot (не требует остановки nginx)
+echo "📜 Получение SSL сертификата от Let's Encrypt (webroot метод)..."
+echo "   Это не требует остановки Nginx"
+echo ""
 
-# Запуск nginx обратно
-echo "▶️  Запуск Nginx..."
-docker-compose up -d nginx
+# Пробуем несколько раз, так как Let's Encrypt может иметь rate limits
+MAX_ATTEMPTS=3
+ATTEMPT=1
+SUCCESS=false
+
+while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ "$SUCCESS" = false ]; do
+    echo "   Попытка $ATTEMPT из $MAX_ATTEMPTS..."
+    
+    if docker-compose run --rm --entrypoint "" certbot sh -c "certbot certonly \
+        --webroot \
+        --webroot-path /var/www/certbot \
+        --preferred-challenges http \
+        -d $DOMAIN \
+        -d www.$DOMAIN \
+        --email $EMAIL \
+        --agree-tos \
+        --non-interactive \
+        --force-renewal" 2>&1; then
+        SUCCESS=true
+        echo "   ✅ Сертификат получен успешно!"
+    else
+        if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+            echo "   ⚠️  Попытка $ATTEMPT не удалась, ждем 10 секунд..."
+            sleep 10
+        else
+            echo "   ❌ Все попытки не удались"
+        fi
+    fi
+    ATTEMPT=$((ATTEMPT + 1))
+done
 
 # Проверка сертификата
-if [ -f "certbot/live/$DOMAIN/fullchain.pem" ]; then
+if [ "$SUCCESS" = true ] && [ -f "certbot/live/$DOMAIN/fullchain.pem" ]; then
     echo ""
     echo "✅ SSL сертификат успешно получен!"
     echo ""
@@ -59,17 +100,42 @@ if [ -f "certbot/live/$DOMAIN/fullchain.pem" ]; then
     echo "   - Сертификат: certbot/live/$DOMAIN/fullchain.pem"
     echo "   - Приватный ключ: certbot/live/$DOMAIN/privkey.pem"
     echo ""
-    echo "🔄 Перезапуск Nginx для применения сертификата..."
-    docker-compose restart nginx
+    echo "⚠️  ВАЖНО: Теперь нужно настроить HTTPS в nginx.conf"
+    echo "   1. Раскомментируйте HTTPS server блок в nginx.conf"
+    echo "   2. Перезапустите nginx: docker-compose restart nginx"
     echo ""
-    echo "✅ SSL настроен! Сайт доступен по адресу: https://$DOMAIN"
+    echo "📝 Пример HTTPS блока для nginx.conf:"
+    echo "   server {"
+    echo "     listen 443 ssl http2;"
+    echo "     server_name $DOMAIN www.$DOMAIN;"
+    echo "     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;"
+    echo "     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;"
+    echo "     # ... остальная конфигурация"
+    echo "   }"
     echo ""
     echo "ℹ️  Сертификат будет автоматически обновляться каждые 12 часов"
+    echo ""
+    echo "✅ После настройки HTTPS сайт будет доступен по адресу: https://$DOMAIN"
 else
+    echo ""
     echo "❌ Ошибка при получении сертификата!"
-    echo "   Проверьте:"
-    echo "   - Домен $DOMAIN указывает на IP этого сервера"
-    echo "   - Порты 80 и 443 открыты в файрволе"
+    echo ""
+    echo "🔍 Диагностика:"
+    echo "   1. Проверьте, что домен $DOMAIN указывает на IP этого сервера:"
+    echo "      nslookup $DOMAIN"
+    echo ""
+    echo "   2. Проверьте, что порты 80 и 443 открыты:"
+    echo "      sudo ufw status"
+    echo ""
+    echo "   3. Проверьте, что nginx работает и доступен:"
+    echo "      curl http://$DOMAIN/.well-known/acme-challenge/test"
+    echo ""
+    echo "   4. Проверьте логи certbot:"
+    echo "      docker-compose logs certbot"
+    echo ""
+    echo "   5. Проверьте, что директория certbot/www существует:"
+    echo "      ls -la certbot/www/"
+    echo ""
     exit 1
 fi
 

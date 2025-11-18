@@ -40,6 +40,7 @@ my-site/
 ├── setup-ssl.sh              # Скрипт получения SSL сертификата
 ├── backup.sh                 # Скрипт резервного копирования
 ├── fix-nginx-ssl.sh          # Исправление проблем с SSL
+├── generate-password-hash.sh # Генерация bcrypt хеша пароля
 ├── docker-compose.yml        # Docker Compose конфигурация
 ├── Dockerfile                # Docker образ
 ├── nginx.conf                # Конфигурация Nginx
@@ -509,6 +510,53 @@ sudo ufw status
 nslookup zelyonkin.ru
 ```
 Домен должен указывать на IP сервера (82.202.138.157).
+
+### Проблема: ADMIN_PASSWORD_HASH пустой в .env
+
+**Симптомы:**
+- В `.env` файле `ADMIN_PASSWORD_HASH=` пустой
+- Не удается войти в админку
+- Скрипт `setup-env.sh` не сгенерировал хеш
+
+**Решение:**
+
+**Вариант 1: Автоматическое исправление (рекомендуется)**
+```bash
+cd ~/var/www/my-site
+# Скрипт install.sh автоматически исправит это при установке
+# Или выполните вручную:
+docker-compose exec web npm run db:force-fix-user
+```
+
+**Вариант 2: Генерация хеша вручную**
+```bash
+cd ~/var/www/my-site
+
+# Используйте скрипт для генерации хеша
+chmod +x generate-password-hash.sh
+./generate-password-hash.sh
+
+# Скопируйте полученный хеш и добавьте в .env:
+# ADMIN_PASSWORD_HASH=<полученный_хеш>
+```
+
+**Вариант 3: Через Docker контейнер**
+```bash
+# Генерируем хеш для пароля "1234"
+HASH=$(docker run --rm node:20-slim sh -c "
+    npm install bcryptjs 2>/dev/null && \
+    node -e \"const bcrypt = require('bcryptjs'); console.log(bcrypt.hashSync('1234', 10))\"
+" | tail -1)
+
+# Добавляем в .env
+echo "ADMIN_PASSWORD_HASH=$HASH" >> .env
+```
+
+После этого перезапустите контейнеры:
+```bash
+docker-compose restart web
+docker-compose exec web npm run db:force-fix-user
+```
 
 ### Ошибка SSL сертификата
 

@@ -189,6 +189,21 @@ chmod +x server-setup.sh
 ./setup.sh  # Эквивалентно ./install.sh
 ```
 
+### generate-password-hash.sh — Генерация хеша пароля
+
+**Назначение:** Генерация bcrypt хеша пароля для добавления в `.env`.
+
+**Использование:**
+```bash
+./generate-password-hash.sh        # Генерирует хеш для пароля "1234"
+./generate-password-hash.sh mypass # Генерирует хеш для указанного пароля
+```
+
+**Что делает:**
+- Использует Docker контейнер или локальный Node.js
+- Генерирует bcrypt хеш (10 rounds)
+- Выводит хеш для копирования в `.env` файл
+
 ## ⚙️ Конфигурационные файлы
 
 ### Dockerfile
