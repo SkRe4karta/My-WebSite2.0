@@ -1,0 +1,213 @@
+#!/bin/bash
+
+# ============================================
+# Единый скрипт полной установки и развертывания
+# Использование: ./install.sh
+# ============================================
+
+set -euo pipefail
+
+# Цвета для вывода
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Функции для логирования
+log_info() {
+    echo -e "${BLUE}ℹ️  $1${NC}"
+}
+
+log_success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+log_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+log_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
+
+error_exit() {
+    log_error "$1"
+    exit 1
+}
+
+echo "═══════════════════════════════════════════════════════════"
+echo "  🚀 Автоматическая установка zelyonkin.ru"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+# Проверка, что скрипт запущен из правильной директории
+if [ ! -f "package.json" ] || [ ! -f "docker-compose.yml" ]; then
+    error_exit "Скрипт должен быть запущен из корня проекта"
+fi
+
+# Проверка Docker
+log_info "Проверка окружения..."
+if ! command -v docker &> /dev/null; then
+    error_exit "Docker не установлен! Запустите сначала: ./server-setup.sh"
+fi
+
+if ! docker info &> /dev/null; then
+    error_exit "Docker daemon не запущен или нет прав доступа. Проверьте: sudo usermod -aG docker \$USER"
+fi
+
+if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
+    error_exit "Docker Compose не установлен! Запустите сначала: ./server-setup.sh"
+fi
+
+log_success "Docker и Docker Compose установлены"
+echo ""
+
+# Шаг 1: Создание .env файла
+log_info "Шаг 1/5: Настройка переменных окружения..."
+if [ ! -f .env ]; then
+    if [ -f setup-env.sh ]; then
+        chmod +x setup-env.sh
+        if echo "" | ./setup-env.sh; then
+            log_success "Файл .env создан"
+    else
+            error_exit "Не удалось создать .env файл"
+        fi
+    else
+        error_exit "setup-env.sh не найден!"
+    fi
+else
+    log_info "Файл .env уже существует, пропускаем создание"
+fi
+
+# Проверка обязательных переменных
+if [ -f .env ]; then
+    source .env 2>/dev/null || true
+    if [ -z "${ADMIN_PASSWORD_HASH:-}" ]; then
+        log_warning "ADMIN_PASSWORD_HASH не задан в .env, будет использован пароль по умолчанию"
+    fi
+fi
+echo ""
+
+# Шаг 2: Создание необходимых директорий
+log_info "Шаг 2/5: Создание директорий..."
+mkdir -p database storage/uploads storage/vault || error_exit "Не удалось создать директории storage"
+mkdir -p certbot/www certbot/conf certbot/logs || error_exit "Не удалось создать директории certbot"
+log_success "Все директории созданы"
+echo ""
+
+# Шаг 3: Установка прав на скрипты
+log_info "Шаг 3/5: Установка прав на скрипты..."
+chmod +x *.sh 2>/dev/null || true
+log_success "Права установлены"
+echo ""
+
+# Шаг 4: Остановка старых контейнеров
+log_info "Шаг 4/5: Остановка старых контейнеров..."
+if docker-compose ps -q &> /dev/null || docker compose ps -q &> /dev/null; then
+    docker-compose down 2>/dev/null || docker compose down 2>/dev/null || true
+    log_success "Старые контейнеры остановлены"
+else
+    log_info "Нет запущенных контейнеров"
+fi
+echo ""
+
+# Шаг 5: Сборка и запуск
+log_info "Шаг 5/5: Сборка и запуск приложения..."
+log_info "   Это может занять несколько минут..."
+echo ""
+
+# Сборка образов
+log_info "   📦 Сборка Docker образов..."
+if docker compose build --no-cache &> /dev/null 2>&1; then
+    docker compose build --no-cache
+else
+docker-compose build --no-cache
+fi
+log_success "   Образы собраны"
+
+# Запуск контейнеров
+log_info "   ▶️  Запуск контейнеров..."
+if docker compose up -d &> /dev/null 2>&1; then
+    docker compose up -d
+else
+docker-compose up -d
+fi
+
+# Ожидание запуска с проверкой healthcheck
+log_info "   ⏳ Ожидание запуска приложения..."
+MAX_WAIT=60
+WAIT_COUNT=0
+HEALTHY=false
+
+while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+    if docker compose exec -T web node -e "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" &> /dev/null 2>&1 || \
+       docker-compose exec -T web node -e "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" &> /dev/null 2>&1; then
+        HEALTHY=true
+        break
+    fi
+    sleep 2
+    WAIT_COUNT=$((WAIT_COUNT + 2))
+    echo -n "."
+done
+echo ""
+
+if [ "$HEALTHY" = true ]; then
+    log_success "   Приложение запущено и готово"
+else
+    log_warning "   Приложение запущено, но healthcheck не прошел (возможно, еще запускается)"
+fi
+
+# Выполнение миграций
+log_info "   🗄️  Выполнение миграций базы данных..."
+if docker compose exec -T web npm run db:migrate &> /dev/null 2>&1; then
+    docker compose exec -T web npm run db:migrate 2>&1 | grep -v "already applied" || log_info "   Миграции применены"
+else
+    docker-compose exec -T web npm run db:migrate 2>&1 | grep -v "already applied" || log_info "   Миграции применены"
+fi
+log_success "   Миграции выполнены"
+
+# Проверка статуса
+echo ""
+log_info "   📊 Статус контейнеров:"
+if docker compose ps &> /dev/null 2>&1; then
+    docker compose ps
+else
+docker-compose ps
+fi
+
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+log_success "Установка завершена успешно!"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+echo "📋 Следующие шаги:"
+echo ""
+echo "1. Получите SSL сертификат:"
+echo "   ./setup-ssl.sh"
+echo ""
+echo "2. Проверьте статус:"
+echo "   docker-compose ps"
+echo ""
+echo "3. Просмотрите логи:"
+echo "   docker-compose logs -f web"
+echo ""
+echo "4. Проверьте healthcheck:"
+echo "   curl http://localhost/api/health"
+echo ""
+echo "5. После получения SSL сертификата сайт будет доступен:"
+echo "   https://zelyonkin.ru"
+echo ""
+echo "⚠️  ВАЖНО:"
+echo "   - Пароль по умолчанию: 1234"
+echo "   - Обязательно смените пароль после первого входа!"
+echo "   - Настройте SSL сертификат перед использованием"
+echo ""
+echo "📋 Полезные команды:"
+echo "   - Просмотр логов: docker-compose logs -f"
+echo "   - Остановка: docker-compose down"
+echo "   - Перезапуск: docker-compose restart"
+echo "   - Бэкап: ./backup.sh"
+echo "   - Обновление без пересборки: ./deploy.sh --no-build"
+echo ""
+

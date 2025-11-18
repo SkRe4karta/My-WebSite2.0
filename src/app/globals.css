@@ -1,0 +1,255 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  
+  /* Фон */
+  --background: #1e1e1e;
+  
+  /* Поверхности */
+  --surface: #333;
+  --surface-muted: #444;
+  --card: #333;
+  
+  /* Зелёные акценты */
+  --accent: #4CAF50;
+  --accent-bright: #4CAF50;
+  --accent-strong: #45a049;
+  --accent-soft: rgba(76, 175, 80, 0.15);
+  --accent-glow: rgba(76, 175, 80, 0.25);
+  
+  /* Текст */
+  --text: #ffffff;
+  --text-bright: #ffffff;
+  --text-muted: #cccccc;
+  --text-dim: #cccccc;
+  
+  /* Границы */
+  --border: rgba(76, 175, 80, 0.3);
+  --border-hover: rgba(76, 175, 80, 0.5);
+  --border-strong: rgba(76, 175, 80, 0.4);
+  
+  /* Тени */
+  --shadow-glow: 0 20px 60px rgba(76, 175, 80, 0.2);
+  --shadow-glow-strong: 0 10px 40px rgba(76, 175, 80, 0.3);
+  
+  /* Состояния */
+  --error: #ef4444;
+  --error-bg: rgba(239, 68, 68, 0.1);
+  --success: #4CAF50;
+  --success-bg: rgba(76, 175, 80, 0.1);
+  
+  /* Типографика */
+  --font-sans: var(--font-geist-sans), 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), 'Fira Code', 'Courier New', monospace;
+  
+  /* Размеры шрифтов */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 1.875rem;
+  --text-4xl: 2.25rem;
+  --text-5xl: 3rem;
+  --text-6xl: 3.75rem;
+  
+  /* Межстрочный интервал */
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.75;
+  
+  /* Скругления */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+  --radius-full: 9999px;
+  
+  /* Переходы */
+  --transition-fast: 150ms ease;
+  --transition-base: 300ms ease;
+  --transition-slow: 500ms ease;
+}
+
+* {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--background);
+  min-height: 100vh;
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: var(--leading-normal);
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.glass-panel {
+  background-color: var(--surface);
+  background: linear-gradient(135deg, rgba(51, 51, 51, 0.98) 0%, rgba(68, 68, 68, 0.95) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(76, 175, 80, 0.1);
+  backdrop-filter: blur(20px);
+  padding: 1.25rem;
+  transition: all var(--transition-base);
+}
+
+.glass-panel:hover {
+  border-color: var(--border-hover);
+  box-shadow: 0 25px 70px rgba(0, 0, 0, 0.6), 0 0 20px var(--accent-glow);
+  background-color: var(--surface-muted);
+}
+
+.accent-border {
+  border: 1px solid var(--border-strong);
+}
+
+.parallax-layer {
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.fade-up {
+  animation: fade-up 0.8s ease forwards;
+  opacity: 0;
+  transform: translateY(30px);
+}
+
+@keyframes fade-up {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes float {
+  0% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+  100% {
+    transform: translateY(0px);
+  }
+}
+
+.floating {
+  animation: float 5s ease-in-out infinite;
+}
+
+/* Типографика */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 700;
+  line-height: var(--leading-tight);
+  color: var(--text);
+}
+
+h1 {
+  font-size: var(--text-5xl);
+  font-weight: 800;
+}
+
+h2 {
+  font-size: var(--text-4xl);
+  font-weight: 700;
+}
+
+h3 {
+  font-size: var(--text-3xl);
+  font-weight: 600;
+}
+
+h4 {
+  font-size: var(--text-2xl);
+  font-weight: 600;
+}
+
+h5 {
+  font-size: var(--text-xl);
+  font-weight: 600;
+}
+
+h6 {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+p {
+  line-height: var(--leading-relaxed);
+  color: var(--text-muted);
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background-color: var(--surface);
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+}
+
+pre {
+  font-family: var(--font-mono);
+  background-color: var(--surface);
+  padding: 1rem;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  border: 1px solid var(--border);
+}
+
+/* Loading states */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.loading-spinner {
+  animation: spin 1s linear infinite;
+}
+
+.loading-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Skeleton loader */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface) 0%,
+    var(--surface-muted) 50%,
+    var(--surface) 100%
+  );
+  background-size: 200% 100%;
+  animation: loading 1.5s ease-in-out infinite;
+}
+
+@keyframes loading {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}

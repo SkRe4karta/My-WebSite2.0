@@ -1,0 +1,62 @@
+#!/bin/bash
+
+# Скрипт для получения SSL сертификата через Let's Encrypt
+# Использование: ./setup-ssl.sh
+
+set -e
+
+DOMAIN="zelyonkin.ru"
+EMAIL="zelyonkin.d@gmail.com"
+
+echo "🔒 Настройка SSL сертификата для $DOMAIN"
+echo ""
+
+# Проверка, что контейнеры запущены
+if ! docker-compose ps | grep -q "portfolio_nginx.*Up"; then
+    echo "❌ Nginx контейнер не запущен!"
+    echo "   Сначала запустите: ./deploy.sh"
+    exit 1
+fi
+
+# Остановка nginx для получения сертификата
+echo "🛑 Временная остановка Nginx..."
+docker-compose stop nginx
+
+# Получение сертификата
+echo "📜 Получение SSL сертификата от Let's Encrypt..."
+docker-compose run --rm certbot certonly \
+    --standalone \
+    --preferred-challenges http \
+    -d "$DOMAIN" \
+    -d "www.$DOMAIN" \
+    --email "$EMAIL" \
+    --agree-tos \
+    --non-interactive
+
+# Запуск nginx обратно
+echo "▶️  Запуск Nginx..."
+docker-compose up -d nginx
+
+# Проверка сертификата
+if [ -f "certbot/live/$DOMAIN/fullchain.pem" ]; then
+    echo ""
+    echo "✅ SSL сертификат успешно получен!"
+    echo ""
+    echo "📋 Информация:"
+    echo "   - Сертификат: certbot/live/$DOMAIN/fullchain.pem"
+    echo "   - Приватный ключ: certbot/live/$DOMAIN/privkey.pem"
+    echo ""
+    echo "🔄 Перезапуск Nginx для применения сертификата..."
+    docker-compose restart nginx
+    echo ""
+    echo "✅ SSL настроен! Сайт доступен по адресу: https://$DOMAIN"
+    echo ""
+    echo "ℹ️  Сертификат будет автоматически обновляться каждые 12 часов"
+else
+    echo "❌ Ошибка при получении сертификата!"
+    echo "   Проверьте:"
+    echo "   - Домен $DOMAIN указывает на IP этого сервера"
+    echo "   - Порты 80 и 443 открыты в файрволе"
+    exit 1
+fi
+

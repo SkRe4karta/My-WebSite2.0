@@ -1,0 +1,198 @@
+#!/bin/bash
+
+# ============================================
+# Скрипт автоматического развертывания
+# Использование: ./deploy.sh [--no-build]
+# ============================================
+
+set -euo pipefail
+
+# Цвета для вывода
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Функция для логирования
+log_info() {
+    echo -e "${BLUE}ℹ️  $1${NC}"
+}
+
+log_success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+log_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+log_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
+
+# Обработка ошибок
+error_exit() {
+    log_error "$1"
+    exit 1
+}
+
+# Проверка аргументов
+SKIP_BUILD=false
+if [[ "${1:-}" == "--no-build" ]]; then
+    SKIP_BUILD=true
+    log_info "Режим обновления без пересборки"
+fi
+
+echo "═══════════════════════════════════════════════════════════"
+echo "  🚀 Развертывание zelyonkin.ru"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+# Проверка, что скрипт запущен из правильной директории
+if [ ! -f "package.json" ] || [ ! -f "docker-compose.yml" ]; then
+    error_exit "Скрипт должен быть запущен из корня проекта"
+fi
+
+# Проверка наличия .env файла
+if [ ! -f .env ]; then
+    error_exit "Файл .env не найден! Создайте .env на основе .env.example или запустите ./setup-env.sh"
+fi
+
+# Проверка обязательных переменных в .env
+log_info "Проверка переменных окружения..."
+source .env 2>/dev/null || true
+
+if [ -z "${ADMIN_PASSWORD_HASH:-}" ]; then
+    error_exit "ADMIN_PASSWORD_HASH не задан в .env файле"
+fi
+
+if [ -z "${NEXTAUTH_SECRET:-}" ]; then
+    log_warning "NEXTAUTH_SECRET не задан, это может быть проблемой безопасности"
+fi
+
+log_success "Переменные окружения проверены"
+
+# Проверка Docker
+log_info "Проверка Docker..."
+if ! command -v docker &> /dev/null; then
+    error_exit "Docker не установлен! Установите Docker или запустите ./server-setup.sh"
+fi
+
+if ! docker info &> /dev/null; then
+    error_exit "Docker daemon не запущен или нет прав доступа. Проверьте: sudo usermod -aG docker \$USER"
+fi
+
+if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
+    error_exit "Docker Compose не установлен!"
+fi
+
+log_success "Docker готов к работе"
+
+# Создание необходимых директорий
+log_info "Создание директорий..."
+mkdir -p database storage/uploads storage/vault || error_exit "Не удалось создать директории"
+mkdir -p certbot/www certbot/conf certbot/logs || error_exit "Не удалось создать директории certbot"
+log_success "Директории созданы"
+
+# Остановка существующих контейнеров
+log_info "Остановка существующих контейнеров..."
+if docker-compose ps -q &> /dev/null || docker compose ps -q &> /dev/null; then
+    docker-compose down 2>/dev/null || docker compose down 2>/dev/null || true
+    log_success "Старые контейнеры остановлены"
+else
+    log_info "Нет запущенных контейнеров"
+fi
+
+# Сборка образов (если не пропущена)
+if [ "$SKIP_BUILD" = false ]; then
+    log_info "Сборка Docker образов..."
+    log_info "   Это может занять несколько минут..."
+    if docker compose build --no-cache &> /dev/null 2>&1; then
+        docker compose build --no-cache
+    else
+docker-compose build --no-cache
+    fi
+    log_success "Образы собраны"
+else
+    log_info "Пропуск сборки (используются существующие образы)"
+fi
+
+# Запуск контейнеров
+log_info "Запуск контейнеров..."
+if docker compose up -d &> /dev/null 2>&1; then
+    docker compose up -d
+else
+docker-compose up -d
+fi
+
+# Ожидание запуска web контейнера
+log_info "Ожидание запуска приложения..."
+MAX_WAIT=60
+WAIT_COUNT=0
+HEALTHY=false
+
+while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+    if docker compose exec -T web node -e "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" &> /dev/null 2>&1 || \
+       docker-compose exec -T web node -e "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" &> /dev/null 2>&1; then
+        HEALTHY=true
+        break
+    fi
+    sleep 2
+    WAIT_COUNT=$((WAIT_COUNT + 2))
+    echo -n "."
+done
+echo ""
+
+if [ "$HEALTHY" = true ]; then
+    log_success "Приложение запущено и готово"
+else
+    log_warning "Приложение запущено, но healthcheck не прошел. Проверьте логи: docker-compose logs web"
+fi
+
+# Выполнение миграций
+log_info "Выполнение миграций базы данных..."
+if docker compose exec -T web npm run db:migrate &> /dev/null 2>&1; then
+    docker compose exec -T web npm run db:migrate 2>&1 | grep -v "already applied" || log_info "Миграции применены"
+else
+    docker-compose exec -T web npm run db:migrate 2>&1 | grep -v "already applied" || log_info "Миграции применены"
+fi
+log_success "Миграции выполнены"
+
+# Проверка статуса
+echo ""
+log_info "Статус контейнеров:"
+if docker compose ps &> /dev/null 2>&1; then
+    docker compose ps
+else
+docker-compose ps
+fi
+
+# Проверка healthcheck
+echo ""
+log_info "Проверка healthcheck..."
+sleep 5
+if curl -sf http://localhost/api/health &> /dev/null || curl -sf http://localhost:3000/api/health &> /dev/null; then
+    log_success "Healthcheck прошел успешно"
+else
+    log_warning "Healthcheck не доступен (возможно, приложение еще запускается)"
+fi
+
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+log_success "Развертывание завершено!"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+echo "🌐 Сайт должен быть доступен по адресу:"
+echo "   - HTTP:  http://zelyonkin.ru"
+echo "   - HTTPS: https://zelyonkin.ru (после настройки SSL)"
+echo ""
+echo "📋 Полезные команды:"
+echo "  - Просмотр логов: docker-compose logs -f"
+echo "  - Логи web: docker-compose logs -f web"
+echo "  - Остановка: docker-compose down"
+echo "  - Перезапуск: docker-compose restart"
+echo "  - Настройка SSL: ./setup-ssl.sh"
+echo "  - Healthcheck: curl http://localhost/api/health"
+echo ""
+
