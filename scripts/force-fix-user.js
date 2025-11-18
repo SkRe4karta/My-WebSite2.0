@@ -33,12 +33,43 @@ async function forceFixUser() {
       console.log('');
     }
 
-    const user = await prisma.user.findUnique({ where: { email: targetEmail } });
+    let user = await prisma.user.findUnique({ where: { email: targetEmail } });
 
+    // Если пользователь не найден, создаем его
     if (!user) {
-      console.error(`❌ Пользователь с email ${targetEmail} не найден!`);
-      console.log('   Запустите: npm run db:init-admin');
-      process.exit(1);
+      console.log(`\n📝 Пользователь не найден, создаем нового администратора...`);
+      const correctHash = await bcrypt.hash(testPassword, 10);
+      user = await prisma.user.create({
+        data: {
+          email: targetEmail,
+          name,
+          passwordHash: correctHash,
+          role: 'admin',
+        },
+      });
+      console.log('✅ Пользователь создан!');
+      console.log(`   - Email: ${user.email}`);
+      console.log(`   - Name: ${user.name}`);
+      console.log(`   - Role: ${user.role}`);
+      
+      // Проверяем вход
+      console.log(`\n🧪 Проверка входа...`);
+      const passwordValid = await bcrypt.compare(testPassword, user.passwordHash);
+      
+      if (passwordValid) {
+        console.log(`   ✅ Пароль "1234" валиден!`);
+      } else {
+        console.log(`   ❌ Ошибка: пароль неверный`);
+      }
+      
+      console.log('\n✅ Пользователь создан и готов к использованию!');
+      console.log(`\n📝 Для входа используйте:`);
+      console.log(`   - Логин: ${name}`);
+      console.log(`   - Или Email: ${targetEmail}`);
+      console.log(`   - Пароль: ${testPassword}`);
+      
+      await prisma.$disconnect();
+      process.exit(0);
     }
 
     console.log('📋 Текущие данные пользователя:');

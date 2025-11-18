@@ -786,33 +786,71 @@ ensure_admin_user() {
         error_exit "Контейнер web не запущен!"
     fi
     
+    # Проверяем, что БД доступна
+    if ! test_database_read; then
+        log_warning "База данных недоступна для чтения, но продолжаем"
+    fi
+    
     # Генерируем хеш, если нужно
     source .env 2>/dev/null || true
     if [ -z "${ADMIN_PASSWORD_HASH:-}" ] || [ "$ADMIN_PASSWORD_HASH" = "" ]; then
+        log_info "Генерация хеша пароля..."
         local hash=$(generate_password_hash "$DEFAULT_PASSWORD")
         if [ -n "$hash" ]; then
             update_env_password_hash "$hash"
+            log_success "Хеш пароля сгенерирован и добавлен в .env"
+        else
+            log_warning "Не удалось сгенерировать хеш, будет использован db:force-fix-user"
         fi
+    else
+        log_info "Хеш пароля уже задан в .env"
     fi
     
-    # Создаем администратора
+    # Создаем администратора через init-admin
     log_info "Запуск db:init-admin..."
-    if run_compose exec -T web npm run db:init-admin 2>&1 | tee -a "$LOG_FILE"; then
-        log_success "Команда db:init-admin выполнена"
+    local init_output=$(run_compose exec -T web npm run db:init-admin 2>&1 | tee -a "$LOG_FILE" || echo "")
+    
+    if echo "$init_output" | grep -qi "✅\|успешно\|created\|exists"; then
+        log_success "Команда db:init-admin выполнена успешно"
     else
-        log_warning "db:init-admin завершился с предупреждением"
+        log_warning "db:init-admin завершился с предупреждением или ошибкой"
+        log_info "Вывод: $(echo "$init_output" | head -5 | tr '\n' ' ')"
     fi
     
     # Исправляем пользователя (гарантирует правильный хеш и name)
-    log_info "Запуск db:force-fix-user..."
-    if run_compose exec -T web npm run db:force-fix-user 2>&1 | tee -a "$LOG_FILE"; then
-        log_success "Команда db:force-fix-user выполнена"
+    log_info "Запуск db:force-fix-user (гарантирует правильный пароль и name)..."
+    local fix_output=$(run_compose exec -T web npm run db:force-fix-user 2>&1 | tee -a "$LOG_FILE" || echo "")
+    
+    if echo "$fix_output" | grep -qi "✅\|успешно\|исправлен\|создан\|валиден"; then
+        log_success "Команда db:force-fix-user выполнена успешно"
     else
         log_warning "db:force-fix-user завершился с предупреждением"
+        log_info "Вывод: $(echo "$fix_output" | head -5 | tr '\n' ' ')"
     fi
     
+    # Ждем немного для синхронизации
+    sleep 2
+    
     # Проверяем создание пользователя
-    verify_admin_created
+    if verify_admin_created; then
+        log_success "Администратор создан и проверен"
+    else
+        log_warning "Администратор не найден после создания, пробуем еще раз..."
+        
+        # Повторная попытка через force-fix-user
+        log_info "Повторная попытка создания через db:force-fix-user..."
+        run_compose exec -T web npm run db:force-fix-user 2>&1 | tee -a "$LOG_FILE" || true
+        sleep 2
+        
+        if verify_admin_created; then
+            log_success "Администратор создан после повторной попытки"
+        else
+            log_error "Не удалось создать администратора после повторной попытки"
+            log_info "Попробуйте выполнить вручную:"
+            log_info "  run_compose exec web npm run db:force-fix-user"
+            error_exit "Администратор не создан"
+        fi
+    fi
     
     # Проверяем заполнение БД данными
     verify_database_populated

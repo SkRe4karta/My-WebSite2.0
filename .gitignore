@@ -83,3 +83,4 @@ next-env.d.ts
 !DEBUG-HEALTHCHECK.md
 !FIX-DATABASE.md
 !FIX-SSL.md
+!FIX-DB-CREATION.md

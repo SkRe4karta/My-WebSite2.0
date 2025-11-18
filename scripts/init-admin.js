@@ -10,27 +10,29 @@ const prisma = new PrismaClient();
 
 async function ensureAdminUser() {
   const email = process.env.ADMIN_EMAIL || 'zelyonkin.d@gmail.com';
-  const passwordHash = process.env.ADMIN_PASSWORD_HASH;
+  let passwordHash = process.env.ADMIN_PASSWORD_HASH;
   // Используем ADMIN_USERNAME как name для входа по логину
   const name = process.env.ADMIN_NAME || process.env.ADMIN_USERNAME || 'skre4karta';
   const username = process.env.ADMIN_USERNAME || 'skre4karta';
+  const defaultPassword = '1234';
 
   console.log('📋 Параметры инициализации:');
   console.log(`   - Email: ${email}`);
   console.log(`   - Username: ${username}`);
   console.log(`   - Name: ${name}`);
-  console.log(`   - PasswordHash: ${passwordHash ? '✅ Установлен' : '❌ ОТСУТСТВУЕТ'}`);
+  console.log(`   - PasswordHash: ${passwordHash ? '✅ Установлен' : '❌ ОТСУТСТВУЕТ (будет сгенерирован)'}`);
 
-  if (!passwordHash) {
-    console.error('❌ ОШИБКА: ADMIN_PASSWORD_HASH не найден в переменных окружения');
-    console.error('   Проверьте файл .env');
-    console.error('   Убедитесь, что переменная ADMIN_PASSWORD_HASH задана');
-    process.exit(1);
+  // Если хеш не задан, генерируем его для пароля по умолчанию
+  if (!passwordHash || passwordHash === '') {
+    console.log('🔐 Генерация bcrypt хеша для пароля по умолчанию "1234"...');
+    passwordHash = await bcrypt.hash(defaultPassword, 10);
+    console.log(`   ✅ Хеш сгенерирован: ${passwordHash.substring(0, 30)}...`);
   }
 
   if (!passwordHash.startsWith('$2')) {
     console.warn('⚠️  ВНИМАНИЕ: ADMIN_PASSWORD_HASH не похож на bcrypt хеш');
-    console.warn('   Хеш должен начинаться с $2a$, $2b$ или $2y$');
+    console.warn('   Генерируем новый bcrypt хеш...');
+    passwordHash = await bcrypt.hash(defaultPassword, 10);
   }
 
   try {

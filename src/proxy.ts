@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
 import { checkBruteForce, getClientIP } from "./lib/bruteforce";
 
-export function middleware(request: NextRequest) {
+export function proxy(request: Request) {
   // Защищаем только эндпоинты авторизации
-  if (request.nextUrl.pathname.startsWith("/api/auth/")) {
-    const ip = getClientIP(request);
+  const url = new URL(request.url);
+  
+  if (url.pathname.startsWith("/api/auth/")) {
+    // getClientIP принимает Request | Headers, передаем headers из Request
+    const ip = getClientIP(request.headers);
     
     try {
       checkBruteForce(ip);
