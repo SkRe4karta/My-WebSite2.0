@@ -90,6 +90,9 @@ const nextConfig: NextConfig = {
     optimizeCss: true,
   },
 
+  // Turbopack configuration (empty to use webpack)
+  turbopack: {},
+
   // Webpack optimizations
   webpack: (config, { isServer }) => {
     if (!isServer) {

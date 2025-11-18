@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Логируем успешную смену пароля
-    await logAudit("password_changed", {
+    await logAudit("password_change", {
       userId: user.id,
     });
 

@@ -5,6 +5,7 @@ export type AuditAction =
   | "login_failed"
   | "logout"
   | "password_change"
+  | "password_change_failed"
   | "2fa_enabled"
   | "2fa_disabled"
   | "2fa_failed"

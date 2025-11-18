@@ -19,6 +19,7 @@ const actionLabels: Record<string, string> = {
   login_failed: "Неудачная попытка входа",
   logout: "Выход",
   password_change: "Изменение пароля",
+  password_change_failed: "Неудачная попытка изменения пароля",
   "2fa_enabled": "Включена 2FA",
   "2fa_disabled": "Отключена 2FA",
   "2fa_failed": "Неверный код 2FA",
