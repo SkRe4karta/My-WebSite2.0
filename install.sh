@@ -84,8 +84,9 @@ fi
 # Проверка обязательных переменных
 if [ -f .env ]; then
     source .env 2>/dev/null || true
-    if [ -z "${ADMIN_PASSWORD_HASH:-}" ]; then
-        log_warning "ADMIN_PASSWORD_HASH не задан в .env, будет использован пароль по умолчанию"
+    if [ -z "${ADMIN_PASSWORD_HASH:-}" ] || [ "$ADMIN_PASSWORD_HASH" = "" ]; then
+        log_info "ADMIN_PASSWORD_HASH не задан в .env (это нормально)"
+        log_info "   Хеш будет автоматически сгенерирован после запуска контейнера"
     fi
 fi
 echo ""
@@ -215,28 +216,36 @@ if [ -f "database/db.sqlite" ]; then
     if [ -z "${ADMIN_PASSWORD_HASH:-}" ] || [ "$ADMIN_PASSWORD_HASH" = "" ]; then
         log_info "   🔐 Генерация хеша пароля через Docker контейнер..."
         DEFAULT_PASSWORD="1234"
-        ADMIN_PASSWORD_HASH=$(docker run --rm node:20-slim sh -c "
-            npm install bcryptjs 2>/dev/null && \
-            node -e \"const bcrypt = require('bcryptjs'); console.log(bcrypt.hashSync('$DEFAULT_PASSWORD', 10))\"
-        " 2>/dev/null | tail -1 || echo "")
         
-        if [ -n "$ADMIN_PASSWORD_HASH" ] && [ "$ADMIN_PASSWORD_HASH" != "" ]; then
+        # Генерируем хеш с таймаутом
+        ADMIN_PASSWORD_HASH=$(timeout 30 docker run --rm node:20-slim sh -c "
+            npm install bcryptjs --silent --no-audit --no-fund 2>/dev/null && \
+            node -e \"const bcrypt = require('bcryptjs'); console.log(bcrypt.hashSync('$DEFAULT_PASSWORD', 10))\"
+        " 2>/dev/null | tail -1 | grep -E '^\$2[aby]' || echo "")
+        
+        if [ -n "$ADMIN_PASSWORD_HASH" ] && [ "$ADMIN_PASSWORD_HASH" != "" ] && echo "$ADMIN_PASSWORD_HASH" | grep -qE '^\$2[aby]'; then
             # Обновляем .env файл
             if [ -f .env ]; then
                 # Заменяем пустую строку ADMIN_PASSWORD_HASH на сгенерированный хеш
                 if grep -q "^ADMIN_PASSWORD_HASH=$" .env; then
+                    # Используем правильный разделитель для sed
                     sed -i "s|^ADMIN_PASSWORD_HASH=$|ADMIN_PASSWORD_HASH=$ADMIN_PASSWORD_HASH|" .env
+                elif grep -q "^ADMIN_PASSWORD_HASH=\"\"" .env; then
+                    sed -i "s|^ADMIN_PASSWORD_HASH=\"\"|ADMIN_PASSWORD_HASH=$ADMIN_PASSWORD_HASH|" .env
                 else
                     # Если строка не найдена, добавляем в конец
                     echo "ADMIN_PASSWORD_HASH=$ADMIN_PASSWORD_HASH" >> .env
                 fi
-                log_success "   Хеш пароля добавлен в .env"
+                log_success "   ✅ Хеш пароля добавлен в .env"
                 # Перезагружаем переменные окружения
                 source .env 2>/dev/null || true
             fi
         else
-            log_warning "   Не удалось сгенерировать хеш, будет использован db:force-fix-user"
+            log_warning "   ⚠️  Не удалось сгенерировать хеш через Docker"
+            log_info "   Хеш будет сгенерирован через db:force-fix-user"
         fi
+    else
+        log_info "   ✅ Хеш пароля уже задан в .env"
     fi
     
     # Создаем администратора
