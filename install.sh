@@ -205,7 +205,7 @@ check_compose_version() {
 check_disk_space() {
     log_info "Проверка свободного места на диске..."
     
-    local available_gb=$(df -BG . 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//' || echo "0")
+    local available_gb=$(df -BG . 2>/dev/null | tail -1 | awk "{print \$4}" | sed 's/G//' || echo "0")
     
     if [ "$available_gb" -lt "$MIN_DISK_SPACE_GB" ]; then
         error_exit "Недостаточно свободного места на диске! Требуется минимум ${MIN_DISK_SPACE_GB}GB, доступно ${available_gb}GB"
@@ -1380,7 +1380,7 @@ build_docker_images() {
         
         # Метод 2: через docker images (если метод 1 не сработал)
         if [ "$image_check" = false ]; then
-            local image_name=$(grep -E "^[[:space:]]*image:|^[[:space:]]*build:" docker-compose.yml 2>/dev/null | head -1 | awk '{print $2}' || echo "")
+            local image_name=$(grep -E "^[[:space:]]*image:|^[[:space:]]*build:" docker-compose.yml 2>/dev/null | head -1 | awk "{print \$2}" || echo "")
             if [ -z "$image_name" ]; then
                 # Если image не указан, используем имя проекта + сервиса
                 local project_name=$(basename "$(pwd)" 2>/dev/null || echo "my-portfolio-site")
@@ -2053,7 +2053,7 @@ run_migrations() {
                 run_compose exec -T web sh -c "chmod 777 /app/database/db.sqlite 2>/dev/null || true" || true
                 
                 # Проверяем права после установки
-                local db_perms=$(run_compose exec -T web ls -l /app/database/db.sqlite 2>/dev/null | awk '{print $1}' || echo "")
+                local db_perms=$(run_compose exec -T web ls -l /app/database/db.sqlite 2>/dev/null | awk "{print \$1}" || echo "")
                 log_info "Права на файл БД: $db_perms"
             fi
             
@@ -2693,10 +2693,10 @@ run_migrations() {
                     
                     # Пробуем использовать prisma db push для принудительного создания
                     log_info "Использование prisma db push для принудительного создания БД..."
-                    local db_push_output=$(run_compose exec -T -w /app web sh -c "
+                    local db_push_output=$(run_compose exec -T -w /app web sh -c '
                         cd /app && \
                         npx prisma db push --accept-data-loss --skip-generate 2>&1
-                    " 2>&1 | tee -a "$LOG_FILE" || echo "")
+                    ' 2>&1 | tee -a "$LOG_FILE" || echo "")
                     
                     if echo "$db_push_output" | grep -q "Your database is now in sync\|Database is up to date\|Pushing\|Applied"; then
                         log_success "БД создана через prisma db push"
@@ -2930,7 +2930,7 @@ verify_all_containers() {
     local all_healthy=true
     
     for container in "${containers[@]}"; do
-        local status=$(run_compose ps "$container" 2>/dev/null | tail -1 | awk '{print $7}' || echo "unknown")
+        local status=$(run_compose ps "$container" 2>/dev/null | tail -1 | awk "{print \$7}" || echo "unknown")
         
         if echo "$status" | grep -q "Up"; then
             log_success "Контейнер $container: $status"
