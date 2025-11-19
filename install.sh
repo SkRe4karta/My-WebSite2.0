@@ -1247,7 +1247,7 @@ test_database_write() {
                 await prisma.\$connect();
                 // Создаем тестовую таблицу и запись
                 await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _test_write (id INTEGER PRIMARY KEY, test_value TEXT);\`;
-                await prisma.\$executeRaw\`INSERT INTO _test_write (test_value) VALUES (\''"'"'test'"'"');\`;
+                await prisma.\$executeRaw\`INSERT INTO _test_write (test_value) VALUES (\"test\");\`;
                 // Читаем для гарантии записи
                 const result = await prisma.\$queryRaw\`SELECT * FROM _test_write LIMIT 1;\`;
                 // Удаляем тестовую таблицу
@@ -1581,7 +1581,7 @@ run_migrations() {
                             await prisma.\$connect();
                             // Создаем тестовую таблицу и запись
                             await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _force_init (id INTEGER PRIMARY KEY, data TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);\`;
-                            await prisma.\$executeRaw\`INSERT INTO _force_init (data) VALUES (\''"'"'init_'"'"' || strftime(\''"'"'%s'"'"', \''"'"'now'"'"'));\`;
+                            await prisma.\$executeRaw\`INSERT INTO _force_init (data) VALUES (\"init_\" || strftime(\"%s\", \"now\"));\`;
                             // Читаем для гарантии записи
                             const result = await prisma.\$queryRaw\`SELECT * FROM _force_init LIMIT 1;\`;
                             // Удаляем тестовую таблицу
@@ -1754,7 +1754,7 @@ run_migrations() {
                         
                         // Принудительно создаем запись в БД для гарантии записи на диск
                         await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _force_write_check (id INTEGER PRIMARY KEY, data TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);\`;
-                        await prisma.\$executeRaw\`INSERT INTO _force_write_check (data) VALUES (\''"'"'force_write_'"'"' || strftime(\''"'"'%s'"'"', \''"'"'now'"'"'));\`;
+                        await prisma.\$executeRaw\`INSERT INTO _force_write_check (data) VALUES (\"force_write_\" || strftime(\"%s\", \"now\"));\`;
                         
                         // Читаем запись для гарантии записи на диск
                         const result = await prisma.\$queryRaw\`SELECT * FROM _force_write_check LIMIT 1;\`;
