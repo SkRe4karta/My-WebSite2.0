@@ -724,22 +724,32 @@ verify_database_structure() {
         "UserSetting"
     )
     
-    # Получаем список таблиц через Prisma Client
-    local tables_json=$(run_compose exec -T web node -e "
-        const { PrismaClient } = require('@prisma/client');
-        const prisma = new PrismaClient();
+    # КРИТИЧНО: Устанавливаем DATABASE_URL с абсолютным путем перед запросом
+    local tables_json=$(run_compose exec -T -w /app web sh -c '
+        export DATABASE_URL="file:/app/database/db.sqlite" && \
+        node -e "
+        const { PrismaClient } = require(\"@prisma/client\");
+        const prisma = new PrismaClient({
+            datasources: {
+                db: {
+                    url: process.env.DATABASE_URL
+                }
+            }
+        });
         (async () => {
             try {
-                const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%' ORDER BY name;\`;
+                await prisma.\$connect();
+                const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\" ORDER BY name;\`;
                 console.log(JSON.stringify(result));
             } catch (e) {
-                console.error('[]');
+                console.error(\"[]\");
                 process.exit(1);
             } finally {
-                await prisma.\$disconnect();
+                try { await prisma.\$disconnect(); } catch (err) {}
             }
         })();
-    " 2>/dev/null || echo "[]")
+        "
+    ' 2>&1 || echo "[]")
     
     # Извлекаем имена таблиц
     local found_tables=$(echo "$tables_json" | grep -o '"name":"[^"]*"' | sed 's/"name":"\([^"]*\)"/\1/' || echo "")
@@ -778,49 +788,70 @@ verify_database_populated() {
         return 0
     fi
     
+    # КРИТИЧНО: Устанавливаем DATABASE_URL с абсолютным путем перед запросом
     # Проверяем наличие пользователей
-    local user_count=$(run_compose exec -T web node -e "
-        const { PrismaClient } = require('@prisma/client');
-        const prisma = new PrismaClient();
+    local user_count=$(run_compose exec -T -w /app web sh -c '
+        export DATABASE_URL="file:/app/database/db.sqlite" && \
+        node -e "
+        const { PrismaClient } = require(\"@prisma/client\");
+        const prisma = new PrismaClient({
+            datasources: {
+                db: {
+                    url: process.env.DATABASE_URL
+                }
+            }
+        });
         (async () => {
             try {
+                await prisma.\$connect();
                 const count = await prisma.user.count();
                 console.log(count);
             } catch (e) {
-                console.error('0');
+                console.error(\"0\");
                 process.exit(1);
             } finally {
-                await prisma.\$disconnect();
+                try { await prisma.\$disconnect(); } catch (err) {}
             }
         })();
-    " 2>/dev/null || echo "0")
+        "
+    ' 2>&1 || echo "0")
     
-    if [ "$user_count" -gt 0 ]; then
+    if [ "$user_count" -gt 0 ] && [ "$user_count" != "error" ]; then
         log_success "База данных заполнена (найдено пользователей: $user_count)"
         
         # Проверяем наличие администратора
-        local admin_exists=$(run_compose exec -T web node -e "
-            const { PrismaClient } = require('@prisma/client');
-            const prisma = new PrismaClient();
+        local admin_exists=$(run_compose exec -T -w /app web sh -c '
+            export DATABASE_URL="file:/app/database/db.sqlite" && \
+            node -e "
+            const { PrismaClient } = require(\"@prisma/client\");
+            const prisma = new PrismaClient({
+                datasources: {
+                    db: {
+                        url: process.env.DATABASE_URL
+                    }
+                }
+            });
             (async () => {
                 try {
+                    await prisma.\$connect();
                     const admin = await prisma.user.findFirst({
-                        where: { role: 'admin' },
+                        where: { role: \"admin\" },
                         select: { email: true, name: true }
                     });
                     if (admin) {
                         console.log(JSON.stringify(admin));
                     } else {
-                        console.log('{}');
+                        console.log(\"{}\");
                     }
                 } catch (e) {
-                    console.error('{}');
+                    console.error(\"{}\");
                     process.exit(1);
                 } finally {
-                    await prisma.\$disconnect();
+                    try { await prisma.\$disconnect(); } catch (err) {}
                 }
             })();
-        " 2>/dev/null || echo "{}")
+            "
+        ' 2>&1 || echo "{}")
         
         if echo "$admin_exists" | grep -q "email"; then
             local admin_email=$(echo "$admin_exists" | grep -o '"email":"[^"]*"' | sed 's/"email":"\([^"]*\)"/\1/' || echo "")
@@ -952,9 +983,14 @@ ensure_admin_user() {
         log_info "Хеш пароля уже задан в .env"
     fi
     
+    # КРИТИЧНО: Перезапускаем контейнер для применения обновленного DATABASE_URL из .env
+    log_info "Перезапуск контейнера web для применения обновленного DATABASE_URL..."
+    run_compose restart web 2>/dev/null || true
+    sleep 5
+    
     # Создаем администратора через init-admin
     log_info "Запуск db:init-admin..."
-    local init_output=$(run_compose exec -T web npm run db:init-admin 2>&1 | tee -a "$LOG_FILE" || echo "")
+    local init_output=$(run_compose exec -T -w /app web sh -c 'export DATABASE_URL="file:/app/database/db.sqlite" && npm run db:init-admin' 2>&1 | tee -a "$LOG_FILE" || echo "")
     
     if echo "$init_output" | grep -qi "✅\|успешно\|created\|exists\|Администратор"; then
         log_success "Команда db:init-admin выполнена успешно"
@@ -964,16 +1000,31 @@ ensure_admin_user() {
         sleep 2
         
         # Проверяем, что администратор действительно создан
-        local admin_check=$(run_compose exec -T -w /app web node -e "
-            const { PrismaClient } = require('@prisma/client');
-            const prisma = new PrismaClient();
+        local admin_check=$(run_compose exec -T -w /app web sh -c '
+            export DATABASE_URL="file:/app/database/db.sqlite" && \
+            node -e "
+            const { PrismaClient } = require(\"@prisma/client\");
+            const prisma = new PrismaClient({
+                datasources: {
+                    db: {
+                        url: process.env.DATABASE_URL
+                    }
+                }
+            });
             (async () => {
                 try {
-                    const admin = await prisma.user.findFirst({ where: { role: 'admin' }, select: { email: true, name: true } });
-                    if (admin) { console.log('admin_found:' + admin.email); } else { console.log('admin_not_found'); }
-                } catch (e) { console.error('check_error:', e.message); process.exit(1); } finally { await prisma.\$disconnect(); }
+                    await prisma.\$connect();
+                    const admin = await prisma.user.findFirst({ where: { role: \"admin\" }, select: { email: true, name: true } });
+                    if (admin) { console.log(\"admin_found:\" + admin.email); } else { console.log(\"admin_not_found\"); }
+                } catch (e) { 
+                    console.error(\"check_error:\", e.message); 
+                    process.exit(1); 
+                } finally { 
+                    try { await prisma.\$disconnect(); } catch (err) {}
+                }
             })();
-        " 2>/dev/null || echo "check_failed")
+            "
+        ' 2>&1 || echo "check_failed")
         
         if echo "$admin_check" | grep -q "admin_found"; then
             local admin_email=$(echo "$admin_check" | grep -o "admin_found:[^:]*" | cut -d: -f2 || echo "")
@@ -988,7 +1039,7 @@ ensure_admin_user() {
     
     # Исправляем пользователя (гарантирует правильный хеш и name)
     log_info "Запуск db:force-fix-user (гарантирует правильный пароль и name)..."
-    local fix_output=$(run_compose exec -T web npm run db:force-fix-user 2>&1 | tee -a "$LOG_FILE" || echo "")
+    local fix_output=$(run_compose exec -T -w /app web sh -c 'export DATABASE_URL="file:/app/database/db.sqlite" && npm run db:force-fix-user' 2>&1 | tee -a "$LOG_FILE" || echo "")
     
     if echo "$fix_output" | grep -qi "✅\|успешно\|исправлен\|создан\|валиден\|Администратор"; then
         log_success "Команда db:force-fix-user выполнена успешно"
@@ -1031,7 +1082,7 @@ ensure_admin_user() {
         
         # Повторная попытка через force-fix-user
         log_info "Повторная попытка создания через db:force-fix-user..."
-        run_compose exec -T web npm run db:force-fix-user 2>&1 | tee -a "$LOG_FILE" || true
+        run_compose exec -T -w /app web sh -c 'export DATABASE_URL="file:/app/database/db.sqlite" && npm run db:force-fix-user' 2>&1 | tee -a "$LOG_FILE" || true
         sleep 2
         
         if verify_admin_created; then
@@ -1056,13 +1107,23 @@ verify_admin_created() {
         return 0
     fi
     
+    # КРИТИЧНО: Устанавливаем DATABASE_URL с абсолютным путем перед запросом
     # Метод 1: Проверяем через Prisma Client напрямую
-    local admin_check=$(run_compose exec -T web node -e "
-        const { PrismaClient } = require('@prisma/client');
-        const prisma = new PrismaClient();
+    local admin_check=$(run_compose exec -T -w /app web sh -c '
+        export DATABASE_URL="file:/app/database/db.sqlite" && \
+        node -e "
+        const { PrismaClient } = require(\"@prisma/client\");
+        const prisma = new PrismaClient({
+            datasources: {
+                db: {
+                    url: process.env.DATABASE_URL
+                }
+            }
+        });
         (async () => {
             try {
-                const email = process.env.ADMIN_EMAIL || 'zelyonkin.d@gmail.com';
+                await prisma.\$connect();
+                const email = process.env.ADMIN_EMAIL || \"zelyonkin.d@gmail.com\";
                 const user = await prisma.user.findUnique({
                     where: { email },
                     select: { id: true, email: true, name: true, role: true, passwordHash: true }
@@ -1074,7 +1135,7 @@ verify_admin_created() {
                         name: user.name,
                         role: user.role,
                         hasPasswordHash: !!user.passwordHash,
-                        isBcrypt: user.passwordHash && user.passwordHash.startsWith('$2')
+                        isBcrypt: user.passwordHash && user.passwordHash.startsWith(\"\$2\")
                     }));
                 } else {
                     console.log(JSON.stringify({ found: false }));
@@ -1083,10 +1144,11 @@ verify_admin_created() {
                 console.error(JSON.stringify({ error: e.message }));
                 process.exit(1);
             } finally {
-                await prisma.\$disconnect();
+                try { await prisma.\$disconnect(); } catch (err) {}
             }
         })();
-    " 2>/dev/null || echo "{\"error\":\"unknown\"}")
+        "
+    ' 2>&1 || echo "{\"error\":\"unknown\"}")
     
     if echo "$admin_check" | grep -q '"found":true'; then
         ADMIN_CREATED=true
@@ -1103,7 +1165,7 @@ verify_admin_created() {
         fi
         
         # Метод 2: Проверяем через test-login скрипт
-        if run_compose exec -T web npm run db:test-login 2>&1 | grep -q "✅ ВХОД ДОЛЖЕН РАБОТАТЬ"; then
+        if run_compose exec -T -w /app web sh -c 'export DATABASE_URL="file:/app/database/db.sqlite" && npm run db:test-login' 2>&1 | grep -q "✅ ВХОД ДОЛЖЕН РАБОТАТЬ"; then
             log_success "Тест входа прошел успешно"
         else
             log_warning "Тест входа не прошел, но администратор существует в БД"
@@ -1280,31 +1342,48 @@ test_database_read() {
         return 0
     fi
     
-    # Пробуем прочитать список таблиц
-    local tables=$(run_compose exec -T web node -e "
-        const { PrismaClient } = require('@prisma/client');
-        const prisma = new PrismaClient();
+    # КРИТИЧНО: Устанавливаем DATABASE_URL с абсолютным путем перед запросом
+    local tables=$(run_compose exec -T -w /app web sh -c '
+        export DATABASE_URL="file:/app/database/db.sqlite" && \
+        node -e "
+        const { PrismaClient } = require(\"@prisma/client\");
+        const prisma = new PrismaClient({
+            datasources: {
+                db: {
+                    url: process.env.DATABASE_URL
+                }
+            }
+        });
         (async () => {
             try {
-                const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
+                await prisma.\$connect();
+                const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\" ORDER BY name;\`;
                 console.log(JSON.stringify(result));
             } catch (e) {
-                console.error('error:', e.message);
+                console.error(\"error:\", e.message);
                 process.exit(1);
             } finally {
-                await prisma.\$disconnect();
+                try { await prisma.\$disconnect(); } catch (err) {}
             }
         })();
-    " 2>/dev/null || echo "[]")
+        "
+    ' 2>&1 || echo "[]")
     
-    if echo "$tables" | grep -q "User\|Session\|Note"; then
+    # Проверяем результат
+    if echo "$tables" | grep -qE '"name"|"User"|"Session"|"Note"'; then
         local table_count=$(echo "$tables" | grep -o '"name"' | wc -l || echo "0")
-        log_success "Тест чтения прошел успешно (найдено таблиц: $table_count)"
-        return 0
-    else
-        log_warning "Тест чтения не прошел или таблицы не найдены"
-        return 1
+        if [ "$table_count" -gt 0 ]; then
+            log_success "Тест чтения прошел успешно (найдено таблиц: $table_count)"
+            # Выводим список таблиц для отладки
+            log_info "Найденные таблицы: $(echo "$tables" | grep -o '"[^"]*"' | head -5 | tr '\n' ' ')"
+            return 0
+        fi
     fi
+    
+    # Если не нашли таблицы, выводим отладочную информацию
+    log_warning "Тест чтения не прошел или таблицы не найдены"
+    log_info "Вывод запроса: $(echo "$tables" | head -3 | tr '\n' ' ')"
+    return 1
 }
 
 run_migrations() {
