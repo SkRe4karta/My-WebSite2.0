@@ -104,7 +104,9 @@ ADMIN_EMAIL=zelyonkin.d@gmail.com
 ADMIN_PASSWORD_HASH=$PASSWORD_HASH
 
 # Database
-DATABASE_URL="file:./database/db.sqlite"
+# ВАЖНО: Используем абсолютный путь для гарантии правильной работы в Docker контейнере
+# docker-compose.yml переопределит это значение, но это обеспечивает консистентность
+DATABASE_URL="file:/app/database/db.sqlite"
 
 # Vault Encryption
 VAULT_ENCRYPTION_KEY=$VAULT_KEY

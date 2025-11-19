@@ -8,6 +8,9 @@ services:
       - .env
     environment:
       - NODE_ENV=production
+      # ВАЖНО: DATABASE_URL переопределяется здесь для гарантии использования абсолютного пути
+      # Это переопределяет значение из .env файла, если там указан относительный путь
+      # Абсолютный путь необходим для правильной работы Prisma в Docker контейнере
       - DATABASE_URL=file:/app/database/db.sqlite
     volumes:
       # Persistent data volumes

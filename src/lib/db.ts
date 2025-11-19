@@ -3,6 +3,21 @@ import { hashPassword, isBcryptHash, verifyPassword } from "./password";
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
+// Валидация DATABASE_URL при инициализации
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  console.error("❌ ОШИБКА: DATABASE_URL не установлен в переменных окружения");
+  throw new Error("DATABASE_URL must be set in environment variables");
+}
+
+// Проверяем, что используется абсолютный путь для SQLite
+if (databaseUrl.startsWith("file:") && databaseUrl.includes("./")) {
+  console.warn("⚠️  ПРЕДУПРЕЖДЕНИЕ: DATABASE_URL использует относительный путь");
+  console.warn(`   Текущий путь: ${databaseUrl}`);
+  console.warn("   Рекомендуется использовать абсолютный путь: file:/app/database/db.sqlite");
+  console.warn("   Это может привести к ошибкам подключения к БД в Docker контейнере");
+}
+
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({

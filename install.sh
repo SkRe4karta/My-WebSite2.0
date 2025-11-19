@@ -983,10 +983,34 @@ ensure_admin_user() {
         log_info "Хеш пароля уже задан в .env"
     fi
     
-    # КРИТИЧНО: Перезапускаем контейнер для применения обновленного DATABASE_URL из .env
-    log_info "Перезапуск контейнера web для применения обновленного DATABASE_URL..."
-    run_compose restart web 2>/dev/null || true
+    # КРИТИЧНО: Пересоздаем контейнер для применения обновленного DATABASE_URL из .env
+    # Используем --force-recreate вместо restart, чтобы применить переменные окружения из docker-compose.yml
+    log_info "Пересоздание контейнера web для применения обновленного DATABASE_URL..."
+    log_info "Это пересоздаст контейнер с переменными окружения из docker-compose.yml..."
+    run_compose up -d --force-recreate web 2>/dev/null || true
     sleep 5
+    
+    # Проверяем, что контейнер запустился
+    local retry_count=0
+    local max_retries=10
+    while [ $retry_count -lt $max_retries ]; do
+        if run_compose ps web 2>/dev/null | grep -q "Up"; then
+            log_success "Контейнер web пересоздан и работает"
+            break
+        fi
+        retry_count=$((retry_count + 1))
+        log_info "Ожидание запуска контейнера... ($retry_count/$max_retries)"
+        sleep 2
+    done
+    
+    # Проверяем DATABASE_URL после пересоздания
+    local db_url_check=$(run_compose exec -T web sh -c 'echo "$DATABASE_URL"' 2>/dev/null || echo "")
+    if [ -n "$db_url_check" ]; then
+        log_info "DATABASE_URL в контейнере: $db_url_check"
+        if echo "$db_url_check" | grep -q "^file:\./"; then
+            log_warning "DATABASE_URL все еще использует относительный путь, но продолжаем..."
+        fi
+    fi
     
     # Создаем администратора через init-admin
     log_info "Запуск db:init-admin..."
@@ -1239,6 +1263,47 @@ start_web_container() {
         if run_compose ps web 2>/dev/null | grep -q "Up"; then
             log_success "Контейнер web запущен и работает"
             
+            # КРИТИЧНО: Проверяем DATABASE_URL при первом запуске
+            log_info "Проверка DATABASE_URL в контейнере..."
+            local initial_db_url=$(run_compose exec -T web sh -c 'echo "$DATABASE_URL"' 2>/dev/null || echo "")
+            
+            if [ -n "$initial_db_url" ]; then
+                log_info "DATABASE_URL в контейнере: $initial_db_url"
+                
+                # Если DATABASE_URL использует относительный путь, пересоздаем контейнер
+                if echo "$initial_db_url" | grep -q "^file:\./"; then
+                    log_warning "Обнаружен относительный путь в DATABASE_URL при первом запуске!"
+                    log_info "Пересоздаем контейнер с правильными переменными окружения из docker-compose.yml..."
+                    
+                    # Останавливаем контейнер
+                    run_compose stop web 2>/dev/null || true
+                    sleep 2
+                    
+                    # Пересоздаем контейнер с правильными переменными
+                    if run_compose up -d --force-recreate web 2>&1 | tee -a "$LOG_FILE"; then
+                        log_success "Контейнер web пересоздан"
+                        sleep 10
+                        
+                        # Проверяем DATABASE_URL после пересоздания
+                        local new_db_url=$(run_compose exec -T web sh -c 'echo "$DATABASE_URL"' 2>/dev/null || echo "")
+                        if [ -n "$new_db_url" ]; then
+                            log_info "DATABASE_URL после пересоздания: $new_db_url"
+                            if echo "$new_db_url" | grep -q "^file:/app/database/db.sqlite"; then
+                                log_success "DATABASE_URL исправлен на абсолютный путь"
+                            else
+                                log_warning "DATABASE_URL все еще может быть неправильным: $new_db_url"
+                            fi
+                        fi
+                    else
+                        log_error "Не удалось пересоздать контейнер web"
+                    fi
+                elif echo "$initial_db_url" | grep -q "^file:/app/database/db.sqlite"; then
+                    log_success "DATABASE_URL использует правильный абсолютный путь"
+                fi
+            else
+                log_warning "Не удалось получить DATABASE_URL из контейнера"
+            fi
+            
             # Проверяем логи на критические ошибки
             check_container_logs web
             return 0
@@ -1431,8 +1496,47 @@ run_migrations() {
     if echo "$current_db_url" | grep -q "^file:\./"; then
         log_warning "DATABASE_URL использует относительный путь, исправляем на абсолютный..."
         log_info "Исправляем: $current_db_url -> file:/app/database/db.sqlite"
-        run_compose exec -T web sh -c 'export DATABASE_URL="file:/app/database/db.sqlite"' 2>/dev/null || true
-        current_db_url="file:/app/database/db.sqlite"
+        
+        # Обновляем .env файл с правильным DATABASE_URL
+        if [ -f ".env" ]; then
+            if grep -q "^DATABASE_URL=" .env; then
+                sed -i 's|^DATABASE_URL=.*|DATABASE_URL="file:/app/database/db.sqlite"|g' .env
+            else
+                echo 'DATABASE_URL="file:/app/database/db.sqlite"' >> .env
+            fi
+            log_success "Обновлен .env файл с правильным DATABASE_URL"
+        fi
+        
+        # КРИТИЧНО: Пересоздаем контейнер для применения нового DATABASE_URL
+        # Используем --force-recreate вместо restart, чтобы применить переменные окружения из docker-compose.yml
+        log_info "Пересоздание контейнера web для применения правильного DATABASE_URL..."
+        log_info "Это пересоздаст контейнер с переменными окружения из docker-compose.yml..."
+        run_compose up -d --force-recreate web 2>/dev/null || true
+        sleep 5
+        
+        # Проверяем, что контейнер запустился
+        local retry_count=0
+        local max_retries=10
+        while [ $retry_count -lt $max_retries ]; do
+            if run_compose ps web 2>/dev/null | grep -q "Up"; then
+                log_success "Контейнер web пересоздан и работает"
+                break
+            fi
+            retry_count=$((retry_count + 1))
+            log_info "Ожидание запуска контейнера... ($retry_count/$max_retries)"
+            sleep 2
+        done
+        
+        # Проверяем DATABASE_URL после пересоздания
+        current_db_url=$(run_compose exec -T web sh -c 'echo "$DATABASE_URL"' 2>/dev/null || echo "")
+        log_info "DATABASE_URL после пересоздания: $current_db_url"
+        
+        # Если DATABASE_URL все еще неправильный, это критическая ошибка
+        if echo "$current_db_url" | grep -q "^file:\./"; then
+            log_error "КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL все еще использует относительный путь после пересоздания контейнера!"
+            log_error "Проверьте docker-compose.yml - переменная DATABASE_URL должна быть установлена в секции environment"
+            error_exit "Не удалось исправить DATABASE_URL"
+        fi
     fi
     
     # Проверяем, что DATABASE_URL использует правильный путь
