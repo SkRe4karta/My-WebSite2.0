@@ -2838,7 +2838,10 @@ run_migrations() {
                 fi
             fi
             
-        break
+            # Если успешно, выходим из цикла
+            if [ "$success" = true ]; then
+                break
+            fi
         else
             log_warning "Миграции не применились или вывод не содержит подтверждения"
             log_info "Вывод миграций: $(echo "$migration_output" | head -10 | tr '\n' ' ')"
