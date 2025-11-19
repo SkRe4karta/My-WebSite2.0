@@ -515,6 +515,38 @@ create_database_file() {
     fi
 }
 
+# Вспомогательная функция для выполнения Prisma запросов
+# Использование: run_prisma_query "код JavaScript" [timeout]
+run_prisma_query() {
+    local js_code="$1"
+    local timeout="${2:-30}"
+    local result
+    
+    result=$(timeout "$timeout" run_compose exec -T -w /app web sh -c "export DATABASE_URL='file:/app/database/db.sqlite' && node -e \"
+        const { PrismaClient } = require(\\\"@prisma/client\\\");
+        const prisma = new PrismaClient({
+            datasources: {
+                db: {
+                    url: process.env.DATABASE_URL
+                }
+            }
+        });
+        (async () => {
+            try {
+                await prisma.\\\$connect();
+                $js_code
+            } catch (e) {
+                console.error(\\\"error:\\\", e.message);
+                process.exit(1);
+            } finally {
+                try { await prisma.\\\$disconnect(); } catch (err) {}
+            }
+        })();
+    \"" 2>/dev/null || echo "")
+    
+    echo "$result"
+}
+
 sync_database_file() {
     log_info "Синхронизация файла базы данных..."
     
@@ -2860,30 +2892,12 @@ run_migrations() {
         log_error "База данных не создана после миграций"
         log_info "Пробуем принудительно создать БД через Prisma..."
         
-        # Пробуем принудительно создать БД
-        local force_create=$(run_compose exec -T -w /app web sh -c "export DATABASE_URL='file:/app/database/db.sqlite' && node -e \"
-            const { PrismaClient } = require(\\\"@prisma/client\\\");
-            const prisma = new PrismaClient({
-                datasources: {
-                    db: {
-                        url: process.env.DATABASE_URL
-                    }
-                }
-            });
-            (async () => {
-                try {
-                    await prisma.\\\$connect();
-                    await prisma.\\\$executeRaw\\\`CREATE TABLE IF NOT EXISTS _test_init (id INTEGER PRIMARY KEY);\\\`;
-                    await prisma.\\\$executeRaw\\\`DROP TABLE IF EXISTS _test_init;\\\`;
-                    console.log(\\\"success\\\");
-                } catch (e) {
-                    console.error(\\\"error:\\\", e.message);
-                    process.exit(1);
-                } finally {
-                    try { await prisma.\\\$disconnect(); } catch (err) {}
-                }
-            })();
-        \"" 2>/dev/null || echo "error")
+        # Пробуем принудительно создать БД через упрощенный запрос
+        local force_create=$(run_prisma_query "
+            await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _test_init (id INTEGER PRIMARY KEY);\`;
+            await prisma.\$executeRaw\`DROP TABLE IF EXISTS _test_init;\`;
+            console.log(\"success\");
+        " 15)
         
         if echo "$force_create" | grep -q "success"; then
             log_success "Принудительное создание БД прошло успешно"
