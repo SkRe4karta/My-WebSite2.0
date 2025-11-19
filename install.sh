@@ -1772,8 +1772,11 @@ run_migrations() {
                     });
                     (async () => {
                         try {
-                            const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
-                            console.log(result.length > 0 ? 'yes' : 'no');
+                            const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\" ORDER BY name;\`;
+                            console.log(result.length > 0 ? \"yes\" : \"no\");
+                            if (result.length > 0) {
+                                console.log(\"Tables found:\", JSON.stringify(result.map(r => r.name)));
+                            }
                         } catch (e) {
                             console.error(\"error:\", e.message);
                             process.exit(1);
@@ -1781,7 +1784,8 @@ run_migrations() {
                             try { await prisma.\$disconnect(); } catch (err) {}
                         }
                     })();
-                " 2>/dev/null || echo "no")
+                    "
+                ' 2>&1 || echo "no")
                 
                 if echo "$has_tables" | grep -q "yes"; then
                     db_exists=true
@@ -1858,7 +1862,7 @@ run_migrations() {
                 if echo "$force_write_after_push" | grep -q "force_write_success"; then
                     log_success "Принудительная запись в БД после db push выполнена успешно"
                 else
-                    log_warning "Принудительная запись не выполнена: $(echo "$force_write_after_push" | head -3 | tr '\n' ' ')"
+                    log_warning "Принудительная запись не выполнена: $(echo "$force_write_after_push" | head -3 | tr '\n' ' ' || echo '')"
                 fi
                 
                 # Ждем записи на диск
