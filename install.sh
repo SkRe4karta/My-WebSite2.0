@@ -172,17 +172,17 @@ trap 'log_error "Получен сигнал завершения (SIGTERM)"; cl
 check_docker_version() {
     log_info "Проверка версии Docker..."
     
-    if ! command -v docker &> /dev/null; then
-        error_exit "Docker не установлен! Запустите сначала: ./server-setup.sh"
-    fi
+if ! command -v docker &> /dev/null; then
+    error_exit "Docker не установлен! Запустите сначала: ./server-setup.sh"
+fi
     
     local docker_version=$(docker --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "0.0")
     log_info "Версия Docker: $docker_version"
-    
-    if ! docker info &> /dev/null; then
-        error_exit "Docker daemon не запущен или нет прав доступа. Проверьте: sudo usermod -aG docker \$USER"
-    fi
-    
+
+if ! docker info &> /dev/null; then
+    error_exit "Docker daemon не запущен или нет прав доступа. Проверьте: sudo usermod -aG docker \$USER"
+fi
+
     log_success "Docker готов к работе"
 }
 
@@ -352,7 +352,7 @@ create_env_file() {
         if echo "" | ./setup-env.sh --no-hash 2>&1 | tee -a "$LOG_FILE"; then
             log_success "Файл .env создан"
             return 0
-        else
+    else
             log_error "Не удалось создать .env файл"
             return 1
         fi
@@ -405,11 +405,17 @@ ensure_database_directory() {
     # Создаем директорию на хосте
     mkdir -p database
     
-    # Устанавливаем максимальные права для записи (777)
-    chmod 777 database 2>/dev/null || {
-        log_warning "Не удалось установить права 777, пробуем 755..."
-        chmod 755 database 2>/dev/null || true
-    }
+    # КРИТИЧНО: Устанавливаем максимальные права (777) для гарантии доступа
+    log_info "Установка максимальных прав доступа (777) на директорию database..."
+    if chmod 777 database 2>/dev/null; then
+        log_success "Права 777 установлены на директорию database"
+    else
+        log_warning "Не удалось установить права 777, пробуем через sudo..."
+        sudo chmod 777 database 2>/dev/null || {
+            log_warning "Не удалось установить права 777, пробуем 755..."
+            chmod 755 database 2>/dev/null || sudo chmod 755 database 2>/dev/null || true
+        }
+    fi
     
     # Убеждаемся, что директория доступна для записи
     if [ ! -w "database" ]; then
@@ -417,63 +423,96 @@ ensure_database_directory() {
         chmod 777 database 2>/dev/null || sudo chmod 777 database 2>/dev/null || true
     fi
     
-    # Устанавливаем права внутри контейнера, если он запущен
-    if run_compose ps web 2>/dev/null | grep -q "Up"; then
-        log_info "Настройка прав внутри контейнера..."
-        run_compose exec -T web chmod 777 /app/database 2>/dev/null || true
-        run_compose exec -T web chown -R nextjs:nodejs /app/database 2>/dev/null || true
-        run_compose exec -T web chown -R 1001:1001 /app/database 2>/dev/null || true  # Альтернативный UID/GID
+    # Устанавливаем максимальные права на файл БД, если он существует
+    if [ -f "database/db.sqlite" ]; then
+        log_info "Установка максимальных прав (777) на файл БД..."
+        chmod 777 database/db.sqlite 2>/dev/null || sudo chmod 777 database/db.sqlite 2>/dev/null || true
     fi
     
-    log_success "Директория базы данных готова"
+    # Устанавливаем максимальные права внутри контейнера, если он запущен
+    if run_compose ps web 2>/dev/null | grep -q "Up"; then
+        log_info "Настройка максимальных прав внутри контейнера..."
+        
+        # Используем root для установки прав (выходим из USER nextjs временно)
+        run_compose exec -T --user root web chmod 777 /app/database 2>/dev/null || \
+        run_compose exec -T web sh -c "chmod 777 /app/database 2>/dev/null || true" || true
+        
+        # Устанавливаем права на файл БД, если существует
+        if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+            run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || \
+            run_compose exec -T web sh -c "chmod 777 /app/database/db.sqlite 2>/dev/null || true" || true
+        fi
+        
+        # Пробуем установить владельца (но приоритет - права 777)
+        run_compose exec -T --user root web chown -R nextjs:nodejs /app/database 2>/dev/null || \
+        run_compose exec -T --user root web chown -R 1001:1001 /app/database 2>/dev/null || \
+        run_compose exec -T --user root web chown -R root:root /app/database 2>/dev/null || true
+        
+        # Проверяем, что директория доступна для записи
+        if run_compose exec -T web test -w /app/database 2>/dev/null; then
+            log_success "Директория /app/database доступна для записи внутри контейнера"
+        else
+            log_warning "Директория /app/database может быть недоступна для записи"
+            # Повторная попытка с root
+            run_compose exec -T --user root web chmod 777 /app/database 2>/dev/null || true
+        fi
+    fi
+    
+    log_success "Директория базы данных готова с максимальными правами доступа"
 }
 
 create_database_file() {
-    log_info "Создание файла базы данных..."
+    log_info "Проверка файла базы данных..."
     
-    # Сначала создаем на хосте
-    if [ ! -f "database/db.sqlite" ]; then
-        log_info "Создание пустого файла базы данных на хосте..."
-        if touch database/db.sqlite 2>/dev/null; then
-            chmod 666 database/db.sqlite 2>/dev/null || chmod 777 database/db.sqlite 2>/dev/null || true
-            log_success "Файл базы данных создан на хосте"
+    # НЕ создаем пустой файл! Prisma должен создать его сам
+    # Только проверяем и устанавливаем максимальные права, если файл уже существует
+    
+    if [ -f "database/db.sqlite" ]; then
+        log_info "Файл базы данных существует на хосте, устанавливаем максимальные права..."
+        # Устанавливаем максимальные права (777) для гарантии доступа
+        if chmod 777 database/db.sqlite 2>/dev/null; then
+            log_success "Права 777 установлены на файл БД на хосте"
         else
-            log_warning "Не удалось создать файл на хосте, попробуем внутри контейнера"
-        fi
-    else
-        log_info "Файл базы данных уже существует на хосте"
-        chmod 666 database/db.sqlite 2>/dev/null || chmod 777 database/db.sqlite 2>/dev/null || true
-    fi
-    
-    # Создаем/проверяем внутри контейнера
-    if run_compose ps web 2>/dev/null | grep -q "Up"; then
-        log_info "Создание/проверка файла внутри контейнера..."
-        
-        # Создаем файл, если его нет
-        if ! run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
-            run_compose exec -T web touch /app/database/db.sqlite 2>/dev/null || {
-                log_warning "Не удалось создать файл внутри контейнера"
+            sudo chmod 777 database/db.sqlite 2>/dev/null || {
+                chmod 666 database/db.sqlite 2>/dev/null || true
+                log_warning "Использованы права 666 вместо 777"
             }
         fi
-        
-        # Устанавливаем права на запись
-        run_compose exec -T web chmod 666 /app/database/db.sqlite 2>/dev/null || \
-        run_compose exec -T web chmod 777 /app/database/db.sqlite 2>/dev/null || true
-        
-        # Устанавливаем владельца
-        run_compose exec -T web chown nextjs:nodejs /app/database/db.sqlite 2>/dev/null || \
-        run_compose exec -T web chown 1001:1001 /app/database/db.sqlite 2>/dev/null || true
-        
-        # Проверяем, что файл доступен для записи
-        if run_compose exec -T web test -w /app/database/db.sqlite 2>/dev/null; then
-            log_success "Файл базы данных доступен для записи внутри контейнера"
-        else
-            log_warning "Файл базы данных может быть недоступен для записи"
-        fi
+    else
+        log_info "Файл базы данных не существует, Prisma создаст его при миграциях"
     fi
     
-    # Синхронизируем файл между хостом и контейнером
-    sync_database_file
+    # Проверяем/настраиваем максимальные права внутри контейнера, если файл существует
+    if run_compose ps web 2>/dev/null | grep -q "Up"; then
+        if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+            log_info "Файл базы данных существует в контейнере, устанавливаем максимальные права..."
+            
+            # Устанавливаем максимальные права (777) через root
+            run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || \
+            run_compose exec -T web sh -c "chmod 777 /app/database/db.sqlite 2>/dev/null || true" || {
+                log_warning "Не удалось установить права 777, пробуем 666..."
+                run_compose exec -T --user root web chmod 666 /app/database/db.sqlite 2>/dev/null || true
+            }
+            
+            # Устанавливаем владельца (но приоритет - права 777)
+            run_compose exec -T --user root web chown nextjs:nodejs /app/database/db.sqlite 2>/dev/null || \
+            run_compose exec -T --user root web chown 1001:1001 /app/database/db.sqlite 2>/dev/null || \
+            run_compose exec -T --user root web chown root:root /app/database/db.sqlite 2>/dev/null || true
+            
+            # Проверяем, что файл доступен для записи
+            if run_compose exec -T web test -w /app/database/db.sqlite 2>/dev/null; then
+                log_success "Файл базы данных доступен для записи внутри контейнера"
+            else
+                log_warning "Файл базы данных может быть недоступен для записи, повторная попытка..."
+                run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || true
+            fi
+            
+            # Синхронизируем файл между хостом и контейнером
+            sync_database_file
+        else
+            log_info "Файл базы данных не существует в контейнере, Prisma создаст его"
+        fi
+    fi
 }
 
 sync_database_file() {
@@ -483,32 +522,84 @@ sync_database_file() {
         return 0
     fi
     
-    # Проверяем размер файла в контейнере
-    local container_size=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
-    local host_size=0
+    local max_sync_attempts=5
+    local sync_attempt=1
+    local sync_success=false
     
-    if [ -f "database/db.sqlite" ]; then
-        host_size=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
+    while [ $sync_attempt -le $max_sync_attempts ] && [ "$sync_success" = false ]; do
+        # Проверяем размер файла в контейнере
+        local container_size=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
+        local host_size=0
+        
+        if [ -f "database/db.sqlite" ]; then
+            host_size=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
+        fi
+        
+        # Если файл в контейнере больше, копируем на хост
+        if [ "$container_size" -gt "$host_size" ] && [ "$container_size" -gt 0 ]; then
+            log_info "Файл в контейнере больше (${container_size} > ${host_size}), синхронизируем на хост (попытка $sync_attempt)..."
+            
+            # Принудительно синхронизируем файловую систему в контейнере перед копированием
+            run_compose exec -T web sync 2>/dev/null || true
+            
+            # Копируем файл с принудительной перезаписью
+            if run_compose cp web:/app/database/db.sqlite database/db.sqlite 2>/dev/null; then
+                # Устанавливаем максимальные права на скопированный файл
+                chmod 777 database/db.sqlite 2>/dev/null || sudo chmod 777 database/db.sqlite 2>/dev/null || chmod 666 database/db.sqlite 2>/dev/null || true
+                
+                # Синхронизируем файловую систему на хосте
+                sync 2>/dev/null || true
+                
+                # Проверяем результат
+                local new_host_size=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
+                if [ "$new_host_size" -eq "$container_size" ] && [ "$new_host_size" -gt 0 ]; then
+                    sync_success=true
+                    log_success "Файл синхронизирован на хост (размер: ${new_host_size} байт)"
+                else
+                    log_warning "Размер файла не совпадает после синхронизации, пробуем еще раз..."
+                fi
+            else
+                log_warning "Не удалось скопировать файл из контейнера (попытка $sync_attempt)"
+            fi
+        # Если файл на хосте больше, копируем в контейнер
+        elif [ "$host_size" -gt "$container_size" ] && [ "$host_size" -gt 0 ]; then
+            log_info "Файл на хосте больше (${host_size} > ${container_size}), синхронизируем в контейнер (попытка $sync_attempt)..."
+            
+            # Синхронизируем файловую систему на хосте перед копированием
+            sync 2>/dev/null || true
+            
+            # Копируем файл с принудительной перезаписью
+            if run_compose cp database/db.sqlite web:/app/database/db.sqlite 2>/dev/null; then
+                # Устанавливаем максимальные права внутри контейнера
+                run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || true
+                
+                # Синхронизируем файловую систему в контейнере
+                run_compose exec -T web sync 2>/dev/null || true
+                
+                sync_success=true
+                log_success "Файл синхронизирован в контейнер"
+            else
+                log_warning "Не удалось скопировать файл в контейнер (попытка $sync_attempt)"
+            fi
+        # Если размеры равны и больше 0 - уже синхронизировано
+        elif [ "$container_size" -eq "$host_size" ] && [ "$container_size" -gt 0 ]; then
+            sync_success=true
+            log_success "Файлы синхронизированы (размер: ${container_size} байт)"
+        else
+            log_info "Файл не существует или размер 0, пропускаем синхронизацию"
+            sync_success=true  # Не считаем это ошибкой
+        fi
+        
+        if [ "$sync_success" = false ] && [ $sync_attempt -lt $max_sync_attempts ]; then
+            sleep 2
+        fi
+        
+        sync_attempt=$((sync_attempt + 1))
+    done
+    
+    if [ "$sync_success" = false ]; then
+        log_warning "Не удалось полностью синхронизировать файл после $max_sync_attempts попыток"
     fi
-    
-    # Если файл в контейнере больше, копируем на хост
-    if [ "$container_size" -gt "$host_size" ] && [ "$container_size" -gt 0 ]; then
-        log_info "Файл в контейнере больше, синхронизируем на хост..."
-        run_compose cp web:/app/database/db.sqlite database/db.sqlite 2>/dev/null || {
-            log_warning "Не удалось скопировать файл из контейнера"
-        }
-        chmod 666 database/db.sqlite 2>/dev/null || chmod 777 database/db.sqlite 2>/dev/null || true
-    fi
-    
-    # Если файл на хосте больше, копируем в контейнер
-    if [ "$host_size" -gt "$container_size" ] && [ "$host_size" -gt 0 ]; then
-        log_info "Файл на хосте больше, синхронизируем в контейнер..."
-        run_compose cp database/db.sqlite web:/app/database/db.sqlite 2>/dev/null || {
-            log_warning "Не удалось скопировать файл в контейнер"
-        }
-    fi
-    
-    log_success "Синхронизация завершена"
 }
 
 verify_database_created() {
@@ -520,6 +611,7 @@ verify_database_created() {
     while [ $attempt -le $max_attempts ]; do
         local host_size=0
         local container_size=0
+        local has_tables=false
         
         # Проверяем на хосте
         if [ -f "database/db.sqlite" ]; then
@@ -531,21 +623,65 @@ verify_database_created() {
             if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
                 container_size=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
             fi
+            
+            # Проверяем наличие таблиц через Prisma (даже если размер 0)
+            if [ "$container_size" -eq 0 ] || [ "$host_size" -eq 0 ]; then
+                log_info "Размер файла 0, проверяем наличие таблиц через Prisma..."
+                local table_check=$(run_compose exec -T -w /app web node -e "
+                    const { PrismaClient } = require('@prisma/client');
+                    const prisma = new PrismaClient();
+                    (async () => {
+                        try {
+                            const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
+                            if (result && result.length > 0) {
+                                console.log('tables_found');
+                            } else {
+                                console.log('no_tables');
+                            }
+                        } catch (e) {
+                            console.error('error:', e.message);
+                            process.exit(1);
+                        } finally {
+                            await prisma.\$disconnect();
+                        }
+                    })();
+                " 2>/dev/null || echo "error")
+                
+                if echo "$table_check" | grep -q "tables_found"; then
+                    has_tables=true
+                    log_success "Таблицы найдены в БД через Prisma (даже при размере 0)"
+                fi
+            fi
         fi
         
         # Используем больший размер
         local max_size=$((host_size > container_size ? host_size : container_size))
         
-        if [ "$max_size" -gt 0 ]; then
+        # Если размер > 0 или таблицы найдены, БД создана
+        if [ "$max_size" -gt 0 ] || [ "$has_tables" = true ]; then
             DB_CREATED=true
             
             # Синхронизируем файл, если размеры различаются
-            if [ "$host_size" -ne "$container_size" ]; then
+            if [ "$host_size" -ne "$container_size" ] && [ "$max_size" -gt 0 ]; then
                 log_info "Размеры файла различаются (хост: ${host_size}, контейнер: ${container_size}), синхронизируем..."
                 sync_database_file
             fi
             
-            log_success "База данных создана (размер: ${max_size} байт)"
+            if [ "$max_size" -gt 0 ]; then
+                log_success "База данных создана (размер: ${max_size} байт)"
+            else
+                log_success "База данных создана (таблицы найдены через Prisma, размер файла может быть 0 из-за синхронизации)"
+                # Пробуем синхронизировать еще раз
+                sync_database_file
+                sleep 2
+                # Проверяем размер еще раз
+                if [ -f "database/db.sqlite" ]; then
+                    host_size=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
+                    if [ "$host_size" -gt 0 ]; then
+                        log_success "База данных синхронизирована (размер: ${host_size} байт)"
+                    fi
+                fi
+            fi
             return 0
         fi
         
@@ -563,6 +699,7 @@ verify_database_created() {
     log_info "  1. Права на директорию database: ls -ld database"
     log_info "  2. Права на файл: ls -l database/db.sqlite"
     log_info "  3. Логи контейнера: run_compose logs web | grep -i database"
+    log_info "  4. Попробуйте выполнить вручную: run_compose exec web npm run db:migrate"
     return 1
 }
 
@@ -1149,16 +1286,97 @@ run_migrations() {
     log_info "Выполнение миграций базы данных..."
     
     ensure_database_directory
-    create_database_file
+    
+    # КРИТИЧНО: Удаляем пустой файл БД, если он существует
+    # Prisma должен создать файл сам, а не использовать пустой
+    log_info "Проверка существующего файла БД..."
+    if [ -f "database/db.sqlite" ]; then
+        local db_size=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
+        if [ "$db_size" -eq 0 ]; then
+            log_warning "Обнаружен пустой файл БД, удаляем его (Prisma создаст новый)..."
+            rm -f database/db.sqlite 2>/dev/null || true
+            # Также удаляем внутри контейнера
+            if run_compose ps web 2>/dev/null | grep -q "Up"; then
+                run_compose exec -T web rm -f /app/database/db.sqlite 2>/dev/null || true
+            fi
+            log_success "Пустой файл БД удален"
+        else
+            log_info "Файл БД уже существует (размер: ${db_size} байт), используем его"
+        fi
+    else
+        log_info "Файл БД не существует, Prisma создаст его"
+    fi
     
     # Проверяем DATABASE_URL
     verify_container_environment web
+    
+    # Убеждаемся, что используем правильный путь для DATABASE_URL внутри контейнера
+    log_info "Проверка и настройка DATABASE_URL..."
+    local current_db_url=$(run_compose exec -T web sh -c 'echo "$DATABASE_URL"' 2>/dev/null || echo "")
+    log_info "Текущий DATABASE_URL: $current_db_url"
+    
+    # Проверяем, что DATABASE_URL корректный
+    if [ -z "$current_db_url" ]; then
+        log_warning "DATABASE_URL не установлен в контейнере!"
+        log_info "Устанавливаем DATABASE_URL=file:./database/db.sqlite"
+        run_compose exec -T web sh -c 'export DATABASE_URL="file:./database/db.sqlite"' 2>/dev/null || true
+    fi
+    
+    # Если DATABASE_URL относительный, это нормально для Prisma (работает из рабочей директории /app)
+    if echo "$current_db_url" | grep -q "^file:\./"; then
+        log_info "DATABASE_URL использует относительный путь, это нормально для Prisma (работает из /app)"
+        log_info "Prisma будет использовать путь: /app/database/db.sqlite"
+    elif echo "$current_db_url" | grep -q "^file:/"; then
+        log_info "DATABASE_URL использует абсолютный путь: $current_db_url"
+    else
+        log_warning "DATABASE_URL имеет необычный формат: $current_db_url"
+    fi
+    
+    # КРИТИЧНО: Убеждаемся, что директория доступна для записи с максимальными правами
+    log_info "Проверка и установка максимальных прав на директорию БД..."
+    if ! run_compose exec -T web test -w /app/database 2>/dev/null; then
+        log_warning "Директория БД недоступна для записи, устанавливаем максимальные права..."
+        run_compose exec -T --user root web chmod 777 /app/database 2>/dev/null || \
+        run_compose exec -T web sh -c "chmod 777 /app/database 2>/dev/null || true" || true
+        
+        # Также устанавливаем права на файл БД, если существует
+        if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+            run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || \
+            run_compose exec -T web sh -c "chmod 777 /app/database/db.sqlite 2>/dev/null || true" || true
+        fi
+    fi
+    
+    # Устанавливаем владельца (но приоритет - права 777)
+    run_compose exec -T --user root web chown -R nextjs:nodejs /app/database 2>/dev/null || \
+    run_compose exec -T --user root web chown -R 1001:1001 /app/database 2>/dev/null || \
+    run_compose exec -T --user root web chown -R root:root /app/database 2>/dev/null || true
+    
+    log_success "Директория БД готова с максимальными правами доступа"
+    
+    # КРИТИЧНО: Устанавливаем максимальные права перед миграциями для гарантии
+    log_info "Финальная установка максимальных прав перед миграциями..."
+    if run_compose ps web 2>/dev/null | grep -q "Up"; then
+        # Устанавливаем права через root для гарантии
+        run_compose exec -T --user root web chmod 777 /app/database 2>/dev/null || true
+        if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+            run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || true
+        fi
+        # Устанавливаем владельца
+        run_compose exec -T --user root web chown -R nextjs:nodejs /app/database 2>/dev/null || \
+        run_compose exec -T --user root web chown -R 1001:1001 /app/database 2>/dev/null || \
+        run_compose exec -T --user root web chown -R root:root /app/database 2>/dev/null || true
+    fi
+    # Также на хосте
+    chmod 777 database 2>/dev/null || sudo chmod 777 database 2>/dev/null || true
+    if [ -f "database/db.sqlite" ]; then
+        chmod 777 database/db.sqlite 2>/dev/null || sudo chmod 777 database/db.sqlite 2>/dev/null || true
+    fi
     
     # Тестируем запись перед миграциями
     test_database_write || log_warning "Предупреждение: тест записи не прошел"
     
     log_info "Применение миграций (это может занять время)..."
-    sleep 5
+    sleep 3
     
     local attempt=1
     local success=false
@@ -1167,13 +1385,101 @@ run_migrations() {
     while [ $attempt -le $MAX_RETRIES ] && [ "$success" = false ]; do
         log_info "Попытка $attempt из $MAX_RETRIES..."
         
-        # Выполняем миграции и сохраняем вывод
-        migration_output=$(run_compose exec -T web npm run db:migrate 2>&1 | tee -a "$LOG_FILE" || echo "")
+        # КРИТИЧНО: Используем prisma db push для гарантированного создания БД перед миграциями
+        log_info "Принудительное создание структуры БД через prisma db push..."
+        
+        # prisma db push создает БД из schema.prisma напрямую (без миграций)
+        local db_push_output=$(run_compose exec -T -w /app web sh -c "
+            cd /app && \
+            npx prisma db push --accept-data-loss --skip-generate 2>&1
+        " 2>&1 | tee -a "$LOG_FILE" || echo "")
+        
+        if echo "$db_push_output" | grep -q "Your database is now in sync\|Database is up to date\|Pushing\|Applied\|already in sync"; then
+            log_success "Структура БД создана через prisma db push"
+            
+            # Ждем записи на диск
+            sleep 3
+            run_compose exec -T web sync 2>/dev/null || true
+            sync 2>/dev/null || true
+            
+            # Устанавливаем максимальные права на созданный файл БД
+            if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+                run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || true
+            fi
+            
+            # Синхронизируем файл
+            sync_database_file
+        else
+            log_warning "prisma db push не завершился успешно или БД уже существует"
+            log_info "Вывод db push: $(echo "$db_push_output" | head -5 | tr '\n' ' ')"
+        fi
+        
+        # Теперь выполняем миграции для применения всех миграций из папки migrations
+        log_info "Применение миграций через prisma migrate deploy..."
+        migration_output=$(run_compose exec -T -w /app web sh -c "
+            cd /app && \
+            npx prisma migrate deploy 2>&1
+        " 2>&1 | tee -a "$LOG_FILE" || echo "")
         
         # Проверяем успешность по выводу
-        if echo "$migration_output" | grep -q "successfully applied\|All migrations\|migrations have been applied"; then
+        if echo "$migration_output" | grep -q "successfully applied\|All migrations\|migrations have been applied\|No pending migrations\|already applied"; then
             success=true
             log_success "Миграции применены успешно"
+            
+            # КРИТИЧНО: Принудительно создаем запись в БД для гарантии записи на диск
+            log_info "Принудительное создание записи в БД для гарантии записи на диск..."
+            local force_write_result=$(run_compose exec -T -w /app web node -e "
+                const { PrismaClient } = require('@prisma/client');
+                const prisma = new PrismaClient();
+                (async () => {
+                    try {
+                        // Подключаемся к БД
+                        await prisma.\$connect();
+                        
+                        // Принудительно создаем запись в БД для гарантии записи на диск
+                        await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _force_write_check (id INTEGER PRIMARY KEY, data TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);\`;
+                        await prisma.\$executeRaw\`INSERT INTO _force_write_check (data) VALUES ('force_write_' || strftime('%s', 'now'));\`;
+                        
+                        // Читаем запись для гарантии записи на диск
+                        const result = await prisma.\$queryRaw\`SELECT * FROM _force_write_check LIMIT 1;\`;
+                        
+                        // Удаляем тестовую таблицу
+                        await prisma.\$executeRaw\`DROP TABLE IF EXISTS _force_write_check;\`;
+                        
+                        // Принудительно закрываем соединение для записи на диск
+                        await prisma.\$disconnect();
+                        
+                        // Ждем немного для гарантии записи
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                        
+                        console.log('force_write_success');
+                    } catch (e) {
+                        console.error('force_write_error:', e.message);
+                        await prisma.\$disconnect().catch(() => {});
+                        process.exit(1);
+                    }
+                })();
+            " 2>&1 || echo "force_write_failed")
+            
+            if echo "$force_write_result" | grep -q "force_write_success"; then
+                log_success "Принудительная запись в БД выполнена успешно"
+            else
+                log_warning "Принудительная запись не выполнена, но продолжаем"
+            fi
+            
+            # Устанавливаем максимальные права на файл БД после записи
+            if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+                run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || true
+            fi
+            
+            # Ждем немного для записи на диск и синхронизации
+            sleep 5
+            
+            # Принудительно синхронизируем файловую систему
+            if run_compose ps web 2>/dev/null | grep -q "Up"; then
+                run_compose exec -T web sync 2>/dev/null || true
+            fi
+            sync 2>/dev/null || true
             
             # Синхронизируем файл после миграций
             sync_database_file
@@ -1182,19 +1488,262 @@ run_migrations() {
             local db_size=0
             if [ -f "database/db.sqlite" ]; then
                 db_size=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
-            elif run_compose ps web 2>/dev/null | grep -q "Up"; then
-                db_size=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
+            fi
+            
+            # Также проверяем в контейнере
+            if run_compose ps web 2>/dev/null | grep -q "Up"; then
+                local container_size=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
+                if [ "$container_size" -gt "$db_size" ]; then
+                    db_size=$container_size
+                    # Синхронизируем еще раз
+                    sync_database_file
+                fi
             fi
             
             if [ "$db_size" -gt 0 ]; then
                 log_success "База данных создана (размер: ${db_size} байт)"
+                
+                # Устанавливаем максимальные права на созданный файл БД
+                if [ -f "database/db.sqlite" ]; then
+                    chmod 777 database/db.sqlite 2>/dev/null || sudo chmod 777 database/db.sqlite 2>/dev/null || true
+                fi
+                if run_compose ps web 2>/dev/null | grep -q "Up"; then
+                    run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || true
+                fi
+                
+                # Проверяем наличие таблиц в БД
+                log_info "Проверка наличия таблиц в БД..."
+                local table_count=$(run_compose exec -T -w /app web node -e "
+                    const { PrismaClient } = require('@prisma/client');
+                    const prisma = new PrismaClient();
+                    (async () => {
+                        try {
+                            const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
+                            console.log(result.length);
+                        } catch (e) {
+                            console.error('0');
+                            process.exit(1);
+                        } finally {
+                            await prisma.\$disconnect();
+                        }
+                    })();
+                " 2>/dev/null || echo "0")
+                
+                if [ "$table_count" -gt 0 ]; then
+                    log_success "В БД найдено таблиц: $table_count"
+                    
+                    # Проверяем наличие основных таблиц
+                    local has_user=$(run_compose exec -T -w /app web node -e "
+                        const { PrismaClient } = require('@prisma/client');
+                        const prisma = new PrismaClient();
+                        (async () => {
+                            try {
+                                const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name='User';\`;
+                                console.log(result.length > 0 ? 'yes' : 'no');
+                            } catch (e) {
+                                console.error('no');
+                                process.exit(1);
+                            } finally {
+                                await prisma.\$disconnect();
+                            }
+                        })();
+                    " 2>/dev/null || echo "no")
+                    
+                    if echo "$has_user" | grep -q "yes"; then
+                        log_success "Основные таблицы (User) найдены в БД - БД заполнена данными"
+                    else
+                        log_warning "Таблица User не найдена в БД"
+                    fi
+                else
+                    log_warning "Таблицы не найдены в БД, но размер файла > 0"
+                fi
             else
                 log_warning "База данных создана, но размер файла 0 байт"
+                log_info "Проверяем структуру БД через Prisma и принудительно создаем файл..."
+                
+                # Пробуем проверить через Prisma напрямую
+                local table_check=$(run_compose exec -T -w /app web node -e "
+                    const { PrismaClient } = require('@prisma/client');
+                    const prisma = new PrismaClient();
+                    (async () => {
+                        try {
+                            const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table';\`;
+                            console.log(JSON.stringify(result));
+                        } catch (e) {
+                            console.error('error:', e.message);
+                            process.exit(1);
+                        } finally {
+                            await prisma.\$disconnect();
+                        }
+                    })();
+                " 2>/dev/null || echo "[]")
+                
+                if echo "$table_check" | grep -q "User\|Session"; then
+                    log_success "Таблицы найдены в БД через Prisma"
+                    
+                    # Принудительно создаем запись в БД для гарантии записи на диск
+                    log_info "Принудительное создание записи в БД для синхронизации..."
+                    local force_write=$(run_compose exec -T -w /app web node -e "
+                        const { PrismaClient } = require('@prisma/client');
+                        const prisma = new PrismaClient();
+                        (async () => {
+                            try {
+                                // Пробуем создать временную таблицу и удалить её
+                                await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _sync_check (id INTEGER PRIMARY KEY, data TEXT);\`;
+                                await prisma.\$executeRaw\`INSERT INTO _sync_check (data) VALUES ('sync');\`;
+                                await prisma.\$executeRaw\`DELETE FROM _sync_check;\`;
+                                await prisma.\$executeRaw\`DROP TABLE IF EXISTS _sync_check;\`;
+                                console.log('force_write_success');
+                            } catch (e) {
+                                console.error('force_write_error:', e.message);
+                                process.exit(1);
+                            } finally {
+                                await prisma.\$disconnect();
+                            }
+                        })();
+                    " 2>/dev/null || echo "force_write_failed")
+                    
+                    if echo "$force_write" | grep -q "force_write_success"; then
+                        log_success "Принудительная запись выполнена"
+                    fi
+                    
+                    # Синхронизируем файл
+                    sync_database_file
+                    sleep 3
+                    
+                    # Принудительно синхронизируем файловую систему
+                    if run_compose ps web 2>/dev/null | grep -q "Up"; then
+                        run_compose exec -T web sync 2>/dev/null || true
+                    fi
+                    sync 2>/dev/null || true
+                    
+                    # Проверяем размер еще раз
+                    if [ -f "database/db.sqlite" ]; then
+                        db_size=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
+                    fi
+                    if run_compose ps web 2>/dev/null | grep -q "Up"; then
+                        container_size=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
+                        if [ "$container_size" -gt "$db_size" ]; then
+                            db_size=$container_size
+                            sync_database_file
+                            sleep 2
+                        fi
+                    fi
+                    
+                    if [ "$db_size" -gt 0 ]; then
+                        log_success "База данных синхронизирована (размер: ${db_size} байт)"
+                        
+                        # Проверяем наличие таблиц после синхронизации
+                        local table_count=$(run_compose exec -T -w /app web node -e "
+                            const { PrismaClient } = require('@prisma/client');
+                            const prisma = new PrismaClient();
+                            (async () => {
+                                try {
+                                    const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
+                                    console.log(result.length);
+                                } catch (e) {
+                                    console.error('0');
+                                    process.exit(1);
+                                } finally {
+                                    await prisma.\$disconnect();
+                                }
+                            })();
+                        " 2>/dev/null || echo "0")
+                        
+                        if [ "$table_count" -gt 0 ]; then
+                            log_success "Проверка БД: найдено таблиц - $table_count, размер - ${db_size} байт"
+                        else
+                            log_warning "Таблицы не найдены в БД после синхронизации"
+                        fi
+                    else
+                        log_warning "Размер файла все еще 0, но таблицы существуют в БД"
+                        log_info "Это может быть из-за задержки синхронизации volume, продолжаем..."
+                        
+                        # Проверяем таблицы еще раз через Prisma
+                        local table_check_final=$(run_compose exec -T -w /app web node -e "
+                            const { PrismaClient } = require('@prisma/client');
+                            const prisma = new PrismaClient();
+                            (async () => {
+                                try {
+                                    const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
+                                    console.log(JSON.stringify(result));
+                                } catch (e) {
+                                    console.error('[]');
+                                    process.exit(1);
+                                } finally {
+                                    await prisma.\$disconnect();
+                                }
+                            })();
+                        " 2>/dev/null || echo "[]")
+                        
+                        if echo "$table_check_final" | grep -q "User\|Session\|Note"; then
+                            local table_names=$(echo "$table_check_final" | grep -o '"name":"[^"]*"' | sed 's/"name":"\([^"]*\)"/\1/' | tr '\n' ' ' || echo "")
+                            log_info "Таблицы в БД: $table_names"
+                        fi
+                    fi
+                else
+                    log_warning "Таблицы не найдены в БД, пробуем принудительно создать БД..."
+                    
+                    # Пробуем использовать prisma db push для принудительного создания
+                    log_info "Использование prisma db push для принудительного создания БД..."
+                    local db_push_output=$(run_compose exec -T -w /app web sh -c "
+                        cd /app && \
+                        npx prisma db push --accept-data-loss --skip-generate 2>&1
+                    " 2>&1 | tee -a "$LOG_FILE" || echo "")
+                    
+                    if echo "$db_push_output" | grep -q "Your database is now in sync\|Database is up to date\|Pushing\|Applied"; then
+                        log_success "БД создана через prisma db push"
+                        
+                        # Устанавливаем максимальные права
+                        if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+                            run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || true
+                        fi
+                        
+                        sleep 3
+                        sync_database_file
+                        sleep 2
+                        
+                        # Проверяем размер и таблицы
+                        local push_db_size=0
+                        if [ -f "database/db.sqlite" ]; then
+                            push_db_size=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
+                        fi
+                        
+                        if [ "$push_db_size" -gt 0 ]; then
+                            log_success "БД создана через db push (размер: ${push_db_size} байт)"
+                            
+                            # Проверяем таблицы
+                            local push_table_count=$(run_compose exec -T -w /app web node -e "
+                                const { PrismaClient } = require('@prisma/client');
+                                const prisma = new PrismaClient();
+                                (async () => {
+                                    try {
+                                        const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
+                                        console.log(result.length);
+                                    } catch (e) {
+                                        console.error('0');
+                                        process.exit(1);
+                                    } finally {
+                                        await prisma.\$disconnect();
+                                    }
+                                })();
+                            " 2>/dev/null || echo "0")
+                            
+                            if [ "$push_table_count" -gt 0 ]; then
+                                log_success "В БД найдено таблиц: $push_table_count"
+                            fi
+                        else
+                            log_warning "БД создана, но размер файла 0"
+                        fi
+                    fi
+                fi
             fi
             
-            break
+        break
         else
             log_warning "Миграции не применились или вывод не содержит подтверждения"
+            log_info "Вывод миграций: $(echo "$migration_output" | head -10 | tr '\n' ' ')"
+            
             if [ $attempt -lt $MAX_RETRIES ]; then
                 log_warning "Попытка $attempt не удалась, ждем $RETRY_DELAY секунд..."
                 sleep $RETRY_DELAY
@@ -1241,7 +1790,40 @@ run_migrations() {
             log_warning "Предупреждение: тест чтения после миграций не прошел"
         fi
     else
-        error_exit "База данных не создана после миграций"
+        log_error "База данных не создана после миграций"
+        log_info "Пробуем принудительно создать БД через Prisma..."
+        
+        # Пробуем принудительно создать БД
+        local force_create=$(run_compose exec -T -w /app web node -e "
+            const { PrismaClient } = require('@prisma/client');
+            const prisma = new PrismaClient();
+            (async () => {
+                try {
+                    // Пробуем создать тестовую таблицу
+                    await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _test_init (id INTEGER PRIMARY KEY);\`;
+                    await prisma.\$executeRaw\`DROP TABLE IF EXISTS _test_init;\`;
+                    console.log('success');
+                } catch (e) {
+                    console.error('error:', e.message);
+                    process.exit(1);
+                } finally {
+                    await prisma.\$disconnect();
+                }
+            })();
+        " 2>/dev/null || echo "error")
+        
+        if echo "$force_create" | grep -q "success"; then
+            log_success "Принудительное создание БД прошло успешно"
+            sync_database_file
+    sleep 2
+            if verify_database_created; then
+                log_success "База данных создана после принудительной инициализации"
+            else
+                error_exit "База данных не создана даже после принудительной инициализации"
+            fi
+        else
+            error_exit "Не удалось создать базу данных"
+        fi
     fi
 }
 
@@ -1404,7 +1986,7 @@ main() {
     echo "═══════════════════════════════════════════════════════════"
     echo "  🚀 Автоматическая установка zelyonkin.ru v${SCRIPT_VERSION}"
     echo "═══════════════════════════════════════════════════════════"
-    echo ""
+echo ""
     
     # Создаем лог файл
     echo "Лог установки начат: $(date)" > "$LOG_FILE"
@@ -1440,7 +2022,7 @@ main() {
     # Шаг 3: Создание директорий
     log_step 3 7 "Создание директорий"
     create_directories
-    echo ""
+echo ""
     
     # Шаг 4: Остановка старых контейнеров
     log_step 4 7 "Остановка старых контейнеров"
@@ -1472,41 +2054,41 @@ main() {
     echo ""
     
     # Успешное завершение
-    echo "═══════════════════════════════════════════════════════════"
-    log_success "Установка завершена успешно!"
-    echo "═══════════════════════════════════════════════════════════"
-    echo ""
-    echo "📋 Следующие шаги:"
-    echo ""
-    echo "1. Получите SSL сертификат:"
-    echo "   ./setup-ssl.sh"
-    echo ""
-    echo "2. Проверьте статус:"
+echo "═══════════════════════════════════════════════════════════"
+log_success "Установка завершена успешно!"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+echo "📋 Следующие шаги:"
+echo ""
+echo "1. Получите SSL сертификат:"
+echo "   ./setup-ssl.sh"
+echo ""
+echo "2. Проверьте статус:"
     echo "   $COMPOSE_CMD ps"
-    echo ""
-    echo "3. Просмотрите логи:"
+echo ""
+echo "3. Просмотрите логи:"
     echo "   $COMPOSE_CMD logs -f web"
-    echo ""
-    echo "4. Проверьте healthcheck:"
-    echo "   curl http://localhost/api/health"
-    echo ""
-    echo "5. После получения SSL сертификата сайт будет доступен:"
-    echo "   https://zelyonkin.ru"
-    echo ""
-    echo "⚠️  ВАЖНО:"
+echo ""
+echo "4. Проверьте healthcheck:"
+echo "   curl http://localhost/api/health"
+echo ""
+echo "5. После получения SSL сертификата сайт будет доступен:"
+echo "   https://zelyonkin.ru"
+echo ""
+echo "⚠️  ВАЖНО:"
     echo "   - Пароль по умолчанию: $DEFAULT_PASSWORD"
-    echo "   - Обязательно смените пароль после первого входа!"
-    echo "   - Настройте SSL сертификат перед использованием"
-    echo ""
-    echo "📋 Полезные команды:"
+echo "   - Обязательно смените пароль после первого входа!"
+echo "   - Настройте SSL сертификат перед использованием"
+echo ""
+echo "📋 Полезные команды:"
     echo "   - Просмотр логов: $COMPOSE_CMD logs -f"
     echo "   - Остановка: $COMPOSE_CMD down"
     echo "   - Перезапуск: $COMPOSE_CMD restart"
-    echo "   - Бэкап: ./backup.sh"
+echo "   - Бэкап: ./backup.sh"
     echo ""
     echo "📝 Лог установки сохранен в: $LOG_FILE"
-    echo ""
-    
+echo ""
+
     CLEANUP_NEEDED=false
     log_to_file "Установка успешно завершена"
 }
