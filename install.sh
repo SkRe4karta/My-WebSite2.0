@@ -2861,10 +2861,8 @@ run_migrations() {
         log_info "Пробуем принудительно создать БД через Prisma..."
         
         # Пробуем принудительно создать БД
-        local force_create=$(run_compose exec -T -w /app web sh -c '
-            export DATABASE_URL="file:/app/database/db.sqlite" && \
-            node -e "
-            const { PrismaClient } = require(\"@prisma/client\");
+        local force_create=$(run_compose exec -T -w /app web sh -c "export DATABASE_URL='file:/app/database/db.sqlite' && node -e \"
+            const { PrismaClient } = require(\\\"@prisma/client\\\");
             const prisma = new PrismaClient({
                 datasources: {
                     db: {
@@ -2874,19 +2872,18 @@ run_migrations() {
             });
             (async () => {
                 try {
-                    await prisma.\$connect();
-                    await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _test_init (id INTEGER PRIMARY KEY);\`;
-                    await prisma.\$executeRaw\`DROP TABLE IF EXISTS _test_init;\`;
-                    console.log(\"success\");
+                    await prisma.\\\$connect();
+                    await prisma.\\\$executeRaw\\\`CREATE TABLE IF NOT EXISTS _test_init (id INTEGER PRIMARY KEY);\\\`;
+                    await prisma.\\\$executeRaw\\\`DROP TABLE IF EXISTS _test_init;\\\`;
+                    console.log(\\\"success\\\");
                 } catch (e) {
-                    console.error(\"error:\", e.message);
+                    console.error(\\\"error:\\\", e.message);
                     process.exit(1);
                 } finally {
-                    try { await prisma.\$disconnect(); } catch (err) {}
+                    try { await prisma.\\\$disconnect(); } catch (err) {}
                 }
             })();
-            "
-        ' 2>/dev/null || echo "error")
+        \"" 2>/dev/null || echo "error")
         
         if echo "$force_create" | grep -q "success"; then
             log_success "Принудительное создание БД прошло успешно"
