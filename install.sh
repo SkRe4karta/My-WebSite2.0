@@ -898,14 +898,23 @@ update_env_password_hash() {
         return 1
     fi
     
+    # Используем безопасный метод обновления через временный файл
+    # Это избегает проблем с экранированием специальных символов в bcrypt хеше
+    local temp_file=$(mktemp)
+    
     # Обновляем или добавляем ADMIN_PASSWORD_HASH
     if grep -q "^ADMIN_PASSWORD_HASH=" .env; then
-        if grep -q "^ADMIN_PASSWORD_HASH=$" .env || grep -q '^ADMIN_PASSWORD_HASH=""' .env; then
-            sed -i "s|^ADMIN_PASSWORD_HASH=.*|ADMIN_PASSWORD_HASH=$hash|" .env
-        fi
+        # Удаляем старую строку и добавляем новую
+        grep -v "^ADMIN_PASSWORD_HASH=" .env > "$temp_file" || true
+        echo "ADMIN_PASSWORD_HASH=\"$hash\"" >> "$temp_file"
+        mv "$temp_file" .env
     else
-        echo "ADMIN_PASSWORD_HASH=$hash" >> .env
+        # Добавляем новую строку
+        echo "ADMIN_PASSWORD_HASH=\"$hash\"" >> .env
     fi
+    
+    # Удаляем временный файл, если он остался
+    rm -f "$temp_file" 2>/dev/null || true
     
     log_success "ADMIN_PASSWORD_HASH обновлен в .env"
     source .env 2>/dev/null || true
@@ -1227,69 +1236,39 @@ test_database_write() {
         return 0
     fi
     
-    # Метод 1: Пробуем создать тестовую таблицу через SQL
-    local test_result=$(run_compose exec -T web sh -c "
-        cd /app && \
-        npx prisma db execute --stdin <<< 'CREATE TABLE IF NOT EXISTS _test_write (id INTEGER PRIMARY KEY, test_value TEXT);' 2>&1
-    " 2>/dev/null || echo "error")
+    # Используем Prisma Client для теста записи (самый надежный метод)
+    local test_result=$(run_compose exec -T -w /app web sh -c '
+        export DATABASE_URL="file:/app/database/db.sqlite" && \
+        node -e "
+        const { PrismaClient } = require(\"@prisma/client\");
+        const prisma = new PrismaClient();
+        (async () => {
+            try {
+                await prisma.\$connect();
+                // Создаем тестовую таблицу и запись
+                await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _test_write (id INTEGER PRIMARY KEY, test_value TEXT);\`;
+                await prisma.\$executeRaw\`INSERT INTO _test_write (test_value) VALUES (\''"'"'test'"'"');\`;
+                // Читаем для гарантии записи
+                const result = await prisma.\$queryRaw\`SELECT * FROM _test_write LIMIT 1;\`;
+                // Удаляем тестовую таблицу
+                await prisma.\$executeRaw\`DROP TABLE IF EXISTS _test_write;\`;
+                await prisma.\$disconnect();
+                console.log(\"success\");
+            } catch (e) {
+                console.error(\"error:\", e.message);
+                await prisma.\$disconnect().catch(() => {});
+                process.exit(1);
+            }
+        })();
+        "
+    ' 2>&1 || echo "error")
     
-    if echo "$test_result" | grep -qi "error\|failed"; then
-        log_warning "Метод 1 (SQL) не прошел, пробуем метод 2..."
-        
-        # Метод 2: Пробуем через Prisma Client (более надежно)
-        local test_result2=$(run_compose exec -T web node -e "
-            const { PrismaClient } = require('@prisma/client');
-            const prisma = new PrismaClient();
-            (async () => {
-                try {
-                    // Пробуем простой запрос
-                    await prisma.\$queryRaw\`SELECT 1\`;
-                    console.log('success');
-                } catch (e) {
-                    console.error('error:', e.message);
-                    process.exit(1);
-                } finally {
-                    await prisma.\$disconnect();
-                }
-            })();
-        " 2>&1 || echo "error")
-        
-        if echo "$test_result2" | grep -qi "success"; then
-            log_success "Тест записи прошел успешно (метод 2: Prisma Client)"
-            
-            # Удаляем тестовую таблицу, если она была создана
-            run_compose exec -T web sh -c "
-                cd /app && \
-                npx prisma db execute --stdin <<< 'DROP TABLE IF EXISTS _test_write;' 2>&1
-            " 2>/dev/null || true
-            
-            return 0
-        else
-            log_warning "Оба метода теста записи не прошли, но продолжаем"
-            return 1
-        fi
-    else
-        log_success "Тест записи прошел успешно (метод 1: SQL)"
-        
-        # Пробуем вставить данные
-        local insert_result=$(run_compose exec -T web sh -c "
-            cd /app && \
-            npx prisma db execute --stdin <<< 'INSERT INTO _test_write (test_value) VALUES (\"test\");' 2>&1
-        " 2>/dev/null || echo "error")
-        
-        if echo "$insert_result" | grep -qi "error\|failed"; then
-            log_warning "Вставка данных не прошла, но таблица создана"
-        else
-            log_success "Вставка данных прошла успешно"
-        fi
-        
-        # Удаляем тестовую таблицу
-        run_compose exec -T web sh -c "
-            cd /app && \
-            npx prisma db execute --stdin <<< 'DROP TABLE IF EXISTS _test_write;' 2>&1
-        " 2>/dev/null || true
-        
+    if echo "$test_result" | grep -qi "success"; then
+        log_success "Тест записи прошел успешно"
         return 0
+    else
+        log_warning "Тест записи не прошел: $(echo "$test_result" | head -2 | tr '\n' ' ')"
+        return 1
     fi
 }
 
@@ -1592,33 +1571,32 @@ run_migrations() {
                 
                 # КРИТИЧНО: Принудительно создаем запись в БД для гарантии записи на диск
                 log_info "Принудительное создание записи в БД для гарантии записи на диск..."
-                local force_write_after_push=$(run_compose exec -T -w /app web sh -c "
-                    cd /app && \
-                    export DATABASE_URL='file:/app/database/db.sqlite' && \
-                    node -e \"
-                    const { PrismaClient } = require('@prisma/client');
+                local force_write_after_push=$(run_compose exec -T -w /app web sh -c '
+                    export DATABASE_URL="file:/app/database/db.sqlite" && \
+                    node -e "
+                    const { PrismaClient } = require(\"@prisma/client\");
                     const prisma = new PrismaClient();
                     (async () => {
                         try {
                             await prisma.\$connect();
                             // Создаем тестовую таблицу и запись
                             await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _force_init (id INTEGER PRIMARY KEY, data TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);\`;
-                            await prisma.\$executeRaw\`INSERT INTO _force_init (data) VALUES ('init_' || strftime('%s', 'now'));\`;
+                            await prisma.\$executeRaw\`INSERT INTO _force_init (data) VALUES (\''"'"'init_'"'"' || strftime(\''"'"'%s'"'"', \''"'"'now'"'"'));\`;
                             // Читаем для гарантии записи
                             const result = await prisma.\$queryRaw\`SELECT * FROM _force_init LIMIT 1;\`;
                             // Удаляем тестовую таблицу
                             await prisma.\$executeRaw\`DROP TABLE IF EXISTS _force_init;\`;
                             await prisma.\$disconnect();
                             await new Promise(resolve => setTimeout(resolve, 500));
-                            console.log('force_write_success');
+                            console.log(\"force_write_success\");
                         } catch (e) {
-                            console.error('force_write_error:', e.message);
+                            console.error(\"force_write_error:\", e.message);
                             await prisma.\$disconnect().catch(() => {});
                             process.exit(1);
                         }
                     })();
-                    \"
-                " 2>&1 || echo "force_write_failed")
+                    "
+                ' 2>&1 || echo "force_write_failed")
                 
                 if echo "$force_write_after_push" | grep -q "force_write_success"; then
                     log_success "Принудительная запись в БД после db push выполнена успешно"
@@ -1764,8 +1742,10 @@ run_migrations() {
             
             # КРИТИЧНО: Принудительно создаем запись в БД для гарантии записи на диск
             log_info "Принудительное создание записи в БД для гарантии записи на диск..."
-            local force_write_result=$(run_compose exec -T -w /app web node -e "
-                const { PrismaClient } = require('@prisma/client');
+            local force_write_result=$(run_compose exec -T -w /app web sh -c '
+                export DATABASE_URL="file:/app/database/db.sqlite" && \
+                node -e "
+                const { PrismaClient } = require(\"@prisma/client\");
                 const prisma = new PrismaClient();
                 (async () => {
                     try {
@@ -1774,7 +1754,7 @@ run_migrations() {
                         
                         // Принудительно создаем запись в БД для гарантии записи на диск
                         await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _force_write_check (id INTEGER PRIMARY KEY, data TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);\`;
-                        await prisma.\$executeRaw\`INSERT INTO _force_write_check (data) VALUES ('force_write_' || strftime('%s', 'now'));\`;
+                        await prisma.\$executeRaw\`INSERT INTO _force_write_check (data) VALUES (\''"'"'force_write_'"'"' || strftime(\''"'"'%s'"'"', \''"'"'now'"'"'));\`;
                         
                         // Читаем запись для гарантии записи на диск
                         const result = await prisma.\$queryRaw\`SELECT * FROM _force_write_check LIMIT 1;\`;
@@ -1788,14 +1768,15 @@ run_migrations() {
                         // Ждем немного для гарантии записи
                         await new Promise(resolve => setTimeout(resolve, 500));
                         
-                        console.log('force_write_success');
+                        console.log(\"force_write_success\");
                     } catch (e) {
-                        console.error('force_write_error:', e.message);
+                        console.error(\"force_write_error:\", e.message);
                         await prisma.\$disconnect().catch(() => {});
                         process.exit(1);
                     }
                 })();
-            " 2>&1 || echo "force_write_failed")
+                "
+            ' 2>&1 || echo "force_write_failed")
             
             if echo "$force_write_result" | grep -q "force_write_success"; then
                 log_success "Принудительная запись в БД выполнена успешно"
