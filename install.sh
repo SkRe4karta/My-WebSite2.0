@@ -1771,7 +1771,7 @@ run_migrations() {
                         console.log(\"force_write_success\");
                     } catch (e) {
                         console.error(\"force_write_error:\", e.message);
-                        await prisma.\$disconnect().catch(() => {});
+                        try { await prisma.\$disconnect(); } catch (err) {}
                         process.exit(1);
                     }
                 })();
