@@ -2540,21 +2540,31 @@ run_migrations() {
                     log_success "В БД найдено таблиц: $table_count"
                     
                     # Проверяем наличие основных таблиц
-                    local has_user=$(run_compose exec -T -w /app web node -e "
-                        const { PrismaClient } = require('@prisma/client');
-                        const prisma = new PrismaClient();
+                    local has_user=$(run_compose exec -T -w /app web sh -c '
+                        export DATABASE_URL="file:/app/database/db.sqlite" && \
+                        node -e "
+                        const { PrismaClient } = require(\"@prisma/client\");
+                        const prisma = new PrismaClient({
+                            datasources: {
+                                db: {
+                                    url: process.env.DATABASE_URL
+                                }
+                            }
+                        });
                         (async () => {
                             try {
-                                const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name='User';\`;
-                                console.log(result.length > 0 ? 'yes' : 'no');
+                                await prisma.\$connect();
+                                const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name=\"User\";\`;
+                                console.log(result.length > 0 ? \"yes\" : \"no\");
                             } catch (e) {
-                                console.error('no');
+                                console.error(\"no\");
                                 process.exit(1);
                             } finally {
-                                await prisma.\$disconnect();
+                                try { await prisma.\$disconnect(); } catch (err) {}
                             }
                         })();
-                    " 2>/dev/null || echo "no")
+                        "
+                    ' 2>/dev/null || echo "no")
                     
                     if echo "$has_user" | grep -q "yes"; then
                         log_success "Основные таблицы (User) найдены в БД - БД заполнена данными"
@@ -2569,46 +2579,66 @@ run_migrations() {
                 log_info "Проверяем структуру БД через Prisma и принудительно создаем файл..."
                 
                 # Пробуем проверить через Prisma напрямую
-                local table_check=$(run_compose exec -T -w /app web node -e "
-                    const { PrismaClient } = require('@prisma/client');
-                    const prisma = new PrismaClient();
+                local table_check=$(run_compose exec -T -w /app web sh -c '
+                    export DATABASE_URL="file:/app/database/db.sqlite" && \
+                    node -e "
+                    const { PrismaClient } = require(\"@prisma/client\");
+                    const prisma = new PrismaClient({
+                        datasources: {
+                            db: {
+                                url: process.env.DATABASE_URL
+                            }
+                        }
+                    });
                     (async () => {
                         try {
-                            const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table';\`;
+                            await prisma.\$connect();
+                            const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\";\`;
                             console.log(JSON.stringify(result));
                         } catch (e) {
-                            console.error('error:', e.message);
+                            console.error(\"error:\", e.message);
                             process.exit(1);
                         } finally {
-                            await prisma.\$disconnect();
+                            try { await prisma.\$disconnect(); } catch (err) {}
                         }
                     })();
-                " 2>/dev/null || echo "[]")
+                    "
+                ' 2>/dev/null || echo "[]")
                 
                 if echo "$table_check" | grep -q "User\|Session"; then
                     log_success "Таблицы найдены в БД через Prisma"
                     
                     # Принудительно создаем запись в БД для гарантии записи на диск
                     log_info "Принудительное создание записи в БД для синхронизации..."
-                    local force_write=$(run_compose exec -T -w /app web node -e "
-                        const { PrismaClient } = require('@prisma/client');
-                        const prisma = new PrismaClient();
+                    local force_write=$(run_compose exec -T -w /app web sh -c '
+                        export DATABASE_URL="file:/app/database/db.sqlite" && \
+                        node -e "
+                        const { PrismaClient } = require(\"@prisma/client\");
+                        const prisma = new PrismaClient({
+                            datasources: {
+                                db: {
+                                    url: process.env.DATABASE_URL
+                                }
+                            }
+                        });
                         (async () => {
                             try {
+                                await prisma.\$connect();
                                 // Пробуем создать временную таблицу и удалить её
                                 await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _sync_check (id INTEGER PRIMARY KEY, data TEXT);\`;
-                                await prisma.\$executeRaw\`INSERT INTO _sync_check (data) VALUES ('sync');\`;
+                                await prisma.\$executeRaw\`INSERT INTO _sync_check (data) VALUES (\"sync\");\`;
                                 await prisma.\$executeRaw\`DELETE FROM _sync_check;\`;
                                 await prisma.\$executeRaw\`DROP TABLE IF EXISTS _sync_check;\`;
-                                console.log('force_write_success');
+                                console.log(\"force_write_success\");
                             } catch (e) {
-                                console.error('force_write_error:', e.message);
+                                console.error(\"force_write_error:\", e.message);
                                 process.exit(1);
                             } finally {
-                                await prisma.\$disconnect();
+                                try { await prisma.\$disconnect(); } catch (err) {}
                             }
                         })();
-                    " 2>/dev/null || echo "force_write_failed")
+                        "
+                    ' 2>/dev/null || echo "force_write_failed")
                     
                     if echo "$force_write" | grep -q "force_write_success"; then
                         log_success "Принудительная запись выполнена"
@@ -2641,21 +2671,31 @@ run_migrations() {
                         log_success "База данных синхронизирована (размер: ${db_size} байт)"
                         
                         # Проверяем наличие таблиц после синхронизации
-                        local table_count=$(run_compose exec -T -w /app web node -e "
-                            const { PrismaClient } = require('@prisma/client');
-                            const prisma = new PrismaClient();
+                        local table_count=$(run_compose exec -T -w /app web sh -c '
+                            export DATABASE_URL="file:/app/database/db.sqlite" && \
+                            node -e "
+                            const { PrismaClient } = require(\"@prisma/client\");
+                            const prisma = new PrismaClient({
+                                datasources: {
+                                    db: {
+                                        url: process.env.DATABASE_URL
+                                    }
+                                }
+                            });
                             (async () => {
                                 try {
-                                    const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
+                                    await prisma.\$connect();
+                                    const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\";\`;
                                     console.log(result.length);
                                 } catch (e) {
-                                    console.error('0');
+                                    console.error(\"0\");
                                     process.exit(1);
                                 } finally {
-                                    await prisma.\$disconnect();
+                                    try { await prisma.\$disconnect(); } catch (err) {}
                                 }
                             })();
-                        " 2>/dev/null || echo "0")
+                            "
+                        ' 2>/dev/null || echo "0")
                         
                         if [ "$table_count" -gt 0 ]; then
                             log_success "Проверка БД: найдено таблиц - $table_count, размер - ${db_size} байт"
@@ -2667,21 +2707,31 @@ run_migrations() {
                         log_info "Это может быть из-за задержки синхронизации volume, продолжаем..."
                         
                         # Проверяем таблицы еще раз через Prisma
-                        local table_check_final=$(run_compose exec -T -w /app web node -e "
-                            const { PrismaClient } = require('@prisma/client');
-                            const prisma = new PrismaClient();
+                        local table_check_final=$(run_compose exec -T -w /app web sh -c '
+                            export DATABASE_URL="file:/app/database/db.sqlite" && \
+                            node -e "
+                            const { PrismaClient } = require(\"@prisma/client\");
+                            const prisma = new PrismaClient({
+                                datasources: {
+                                    db: {
+                                        url: process.env.DATABASE_URL
+                                    }
+                                }
+                            });
                             (async () => {
                                 try {
-                                    const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
+                                    await prisma.\$connect();
+                                    const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\";\`;
                                     console.log(JSON.stringify(result));
                                 } catch (e) {
-                                    console.error('[]');
+                                    console.error(\"[]\");
                                     process.exit(1);
                                 } finally {
-                                    await prisma.\$disconnect();
+                                    try { await prisma.\$disconnect(); } catch (err) {}
                                 }
                             })();
-                        " 2>/dev/null || echo "[]")
+                            "
+                        ' 2>/dev/null || echo "[]")
                         
                         if echo "$table_check_final" | grep -q "User\|Session\|Note"; then
                             local table_names=$(echo "$table_check_final" | grep -o '"name":"[^"]*"' | sed 's/"name":"\([^"]*\)"/\1/' | tr '\n' ' ' || echo "")
@@ -2720,21 +2770,31 @@ run_migrations() {
                             log_success "БД создана через db push (размер: ${push_db_size} байт)"
                             
                             # Проверяем таблицы
-                            local push_table_count=$(run_compose exec -T -w /app web node -e "
-                                const { PrismaClient } = require('@prisma/client');
-                                const prisma = new PrismaClient();
+                            local push_table_count=$(run_compose exec -T -w /app web sh -c '
+                                export DATABASE_URL="file:/app/database/db.sqlite" && \
+                                node -e "
+                                const { PrismaClient } = require(\"@prisma/client\");
+                                const prisma = new PrismaClient({
+                                    datasources: {
+                                        db: {
+                                            url: process.env.DATABASE_URL
+                                        }
+                                    }
+                                });
                                 (async () => {
                                     try {
-                                        const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
+                                        await prisma.\$connect();
+                                        const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\";\`;
                                         console.log(result.length);
                                     } catch (e) {
-                                        console.error('0');
+                                        console.error(\"0\");
                                         process.exit(1);
                                     } finally {
-                                        await prisma.\$disconnect();
+                                        try { await prisma.\$disconnect(); } catch (err) {}
                                     }
                                 })();
-                            " 2>/dev/null || echo "0")
+                                "
+                            ' 2>/dev/null || echo "0")
                             
                             if [ "$push_table_count" -gt 0 ]; then
                                 log_success "В БД найдено таблиц: $push_table_count"
@@ -2801,23 +2861,33 @@ run_migrations() {
         log_info "Пробуем принудительно создать БД через Prisma..."
         
         # Пробуем принудительно создать БД
-        local force_create=$(run_compose exec -T -w /app web node -e "
-            const { PrismaClient } = require('@prisma/client');
-            const prisma = new PrismaClient();
+        local force_create=$(run_compose exec -T -w /app web sh -c '
+            export DATABASE_URL="file:/app/database/db.sqlite" && \
+            node -e "
+            const { PrismaClient } = require(\"@prisma/client\");
+            const prisma = new PrismaClient({
+                datasources: {
+                    db: {
+                        url: process.env.DATABASE_URL
+                    }
+                }
+            });
             (async () => {
                 try {
+                    await prisma.\$connect();
                     // Пробуем создать тестовую таблицу
                     await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _test_init (id INTEGER PRIMARY KEY);\`;
                     await prisma.\$executeRaw\`DROP TABLE IF EXISTS _test_init;\`;
-                    console.log('success');
+                    console.log(\"success\");
                 } catch (e) {
-                    console.error('error:', e.message);
+                    console.error(\"error:\", e.message);
                     process.exit(1);
                 } finally {
-                    await prisma.\$disconnect();
+                    try { await prisma.\$disconnect(); } catch (err) {}
                 }
             })();
-        " 2>/dev/null || echo "error")
+            "
+        ' 2>/dev/null || echo "error")
         
         if echo "$force_create" | grep -q "success"; then
             log_success "Принудительное создание БД прошло успешно"
