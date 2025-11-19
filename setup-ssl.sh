@@ -123,22 +123,69 @@ if [ "$SUCCESS" = true ] && [ -f "certbot/live/$DOMAIN/fullchain.pem" ]; then
     echo "   - Сертификат: certbot/live/$DOMAIN/fullchain.pem"
     echo "   - Приватный ключ: certbot/live/$DOMAIN/privkey.pem"
     echo ""
-    echo "⚠️  ВАЖНО: Теперь нужно настроить HTTPS в nginx.conf"
-    echo "   1. Раскомментируйте HTTPS server блок в nginx.conf"
-    echo "   2. Перезапустите nginx: docker-compose restart nginx"
-    echo ""
-    echo "📝 Пример HTTPS блока для nginx.conf:"
-    echo "   server {"
-    echo "     listen 443 ssl http2;"
-    echo "     server_name $DOMAIN www.$DOMAIN;"
-    echo "     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;"
-    echo "     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;"
-    echo "     # ... остальная конфигурация"
-    echo "   }"
+    echo "🔐 Активация HTTPS в nginx.conf..."
+    
+    # Определяем команду docker compose
+    if command -v docker compose &> /dev/null; then
+        COMPOSE_CMD="docker compose"
+    elif command -v docker-compose &> /dev/null; then
+        COMPOSE_CMD="docker-compose"
+    else
+        echo "⚠️  Docker Compose не найден, пропускаем автоматическую активацию"
+        echo "   Выполните вручную: ./enable-https-safe.sh"
+        exit 0
+    fi
+    
+    # Проверяем, что HTTPS блок уже активен (не закомментирован)
+    if grep -q "^[[:space:]]*listen[[:space:]]*443[[:space:]]*ssl" nginx.conf; then
+        echo "✅ HTTPS блок уже активен в nginx.conf"
+    else
+        echo "📝 Активация HTTPS блока в nginx.conf..."
+        
+        # Раскомментируем HTTPS блок
+        if grep -q "^[[:space:]]*#[[:space:]]*server {" nginx.conf && grep -q "#[[:space:]]*listen[[:space:]]*443" nginx.conf; then
+            # Раскомментируем все строки между "# server {" и "# }"
+            sed -i '/^[[:space:]]*#[[:space:]]*server {/,/^[[:space:]]*#[[:space:]]*}/s/^\([[:space:]]*\)#\([[:space:]]*\)/\1\2/' nginx.conf 2>/dev/null || {
+                echo "⚠️  Не удалось автоматически раскомментировать HTTPS блок"
+                echo "   Выполните вручную: ./enable-https-safe.sh"
+            }
+        fi
+        
+        # Проверяем, что блок теперь активен
+        if grep -q "^[[:space:]]*listen[[:space:]]*443[[:space:]]*ssl" nginx.conf; then
+            echo "✅ HTTPS блок активирован"
+        else
+            echo "⚠️  HTTPS блок все еще не активен"
+            echo "   Выполните вручную: ./enable-https-safe.sh"
+        fi
+    fi
+    
+    # Проверяем синтаксис и перезапускаем Nginx
+    if grep -q "^[[:space:]]*listen[[:space:]]*443[[:space:]]*ssl" nginx.conf; then
+        echo ""
+        echo "🔍 Проверка синтаксиса nginx.conf..."
+        
+        # Проверяем синтаксис
+        if $COMPOSE_CMD exec -T nginx nginx -t 2>&1 | grep -v "WARN.*variable is not set" | grep -q "syntax is ok\|test is successful"; then
+            echo "✅ Синтаксис nginx.conf корректен"
+            echo ""
+            echo "🔄 Перезапуск nginx для применения изменений..."
+            $COMPOSE_CMD restart nginx 2>&1 | grep -v "WARN.*variable is not set" || true
+            echo ""
+            echo "✅ HTTPS активирован и nginx перезапущен!"
+            echo ""
+            echo "🌐 Сайт теперь доступен по адресу: https://$DOMAIN"
+        else
+            echo "❌ Ошибка синтаксиса nginx.conf!"
+            echo "   Проверьте конфигурацию вручную:"
+            echo "   $COMPOSE_CMD exec nginx nginx -t"
+            echo ""
+            echo "💡 Возможно, нужно исправить конфигурацию вручную"
+        fi
+    fi
+    
     echo ""
     echo "ℹ️  Сертификат будет автоматически обновляться каждые 12 часов"
-    echo ""
-    echo "✅ После настройки HTTPS сайт будет доступен по адресу: https://$DOMAIN"
 else
     echo ""
     echo "❌ Ошибка при получении сертификата!"

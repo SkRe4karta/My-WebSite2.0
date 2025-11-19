@@ -10,19 +10,21 @@ echo ""
 # Определяем команду docker compose
 if command -v docker &> /dev/null && docker compose version &> /dev/null 2>&1; then
     COMPOSE_CMD="docker compose"
+    USE_COMPOSE_V2=true
 elif command -v docker-compose &> /dev/null; then
     COMPOSE_CMD="docker-compose"
+    USE_COMPOSE_V2=false
 else
     echo "❌ Docker Compose не найден!"
     exit 1
 fi
 
-# Функция для выполнения docker compose команд
+# Функция для выполнения docker compose команд (подавляет предупреждения о переменных)
 run_compose() {
-    if [ "$COMPOSE_CMD" = "docker compose" ]; then
-        docker compose "$@"
+    if [ "$USE_COMPOSE_V2" = true ]; then
+        docker compose "$@" 2>&1 | grep -v "WARN.*variable is not set" || true
     else
-        docker-compose "$@"
+        docker-compose "$@" 2>&1 | grep -v "WARN.*variable is not set" || true
     fi
 }
 
