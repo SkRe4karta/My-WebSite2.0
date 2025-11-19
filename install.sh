@@ -1243,12 +1243,23 @@ build_docker_images() {
 start_web_container() {
     log_info "Запуск контейнера web..."
     
-    if run_compose up -d web 2>&1 | tee -a "$LOG_FILE"; then
+    # КРИТИЧНО: Проверяем, существует ли контейнер, и если да - удаляем его
+    # Это гарантирует, что контейнер будет создан с правильными переменными из docker-compose.yml
+    if run_compose ps web 2>/dev/null | grep -q "portfolio_web"; then
+        log_info "Обнаружен существующий контейнер web, удаляем его для пересоздания с правильными переменными..."
+        run_compose rm -f web 2>/dev/null || true
+        sleep 2
+    fi
+    
+    # КРИТИЧНО: Используем --force-recreate при первом запуске, чтобы гарантировать применение переменных из docker-compose.yml
+    # Это переопределит DATABASE_URL из .env на правильный абсолютный путь из docker-compose.yml
+    log_info "Создание контейнера web с переменными окружения из docker-compose.yml..."
+    if run_compose up -d --force-recreate web 2>&1 | tee -a "$LOG_FILE"; then
         WEB_CONTAINER_STARTED=true
         CLEANUP_NEEDED=true
-        log_success "Контейнер web запущен"
+        log_success "Контейнер web создан и запущен"
     else
-        error_exit "Не удалось запустить контейнер web"
+        error_exit "Не удалось создать контейнер web"
     fi
     
     # Ждем запуска контейнера
@@ -1265,43 +1276,47 @@ start_web_container() {
             
             # КРИТИЧНО: Проверяем DATABASE_URL при первом запуске
             log_info "Проверка DATABASE_URL в контейнере..."
+            sleep 3  # Даем контейнеру время полностью запуститься
+            
             local initial_db_url=$(run_compose exec -T web sh -c 'echo "$DATABASE_URL"' 2>/dev/null || echo "")
             
             if [ -n "$initial_db_url" ]; then
                 log_info "DATABASE_URL в контейнере: $initial_db_url"
                 
-                # Если DATABASE_URL использует относительный путь, пересоздаем контейнер
+                # Если DATABASE_URL использует относительный путь, это критическая ошибка
                 if echo "$initial_db_url" | grep -q "^file:\./"; then
-                    log_warning "Обнаружен относительный путь в DATABASE_URL при первом запуске!"
-                    log_info "Пересоздаем контейнер с правильными переменными окружения из docker-compose.yml..."
+                    log_error "КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL использует относительный путь: $initial_db_url"
+                    log_error "Контейнер был создан с --force-recreate, но переменные из docker-compose.yml не применились!"
+                    log_error "Проверьте docker-compose.yml - переменная DATABASE_URL должна быть в секции environment"
                     
-                    # Останавливаем контейнер
-                    run_compose stop web 2>/dev/null || true
+                    # Пробуем еще раз пересоздать контейнер
+                    log_info "Попытка повторного пересоздания контейнера..."
+                    run_compose rm -f web 2>/dev/null || true
                     sleep 2
+                    run_compose up -d --force-recreate web 2>&1 | tee -a "$LOG_FILE" || true
+                    sleep 10
                     
-                    # Пересоздаем контейнер с правильными переменными
-                    if run_compose up -d --force-recreate web 2>&1 | tee -a "$LOG_FILE"; then
-                        log_success "Контейнер web пересоздан"
-                        sleep 10
-                        
-                        # Проверяем DATABASE_URL после пересоздания
-                        local new_db_url=$(run_compose exec -T web sh -c 'echo "$DATABASE_URL"' 2>/dev/null || echo "")
-                        if [ -n "$new_db_url" ]; then
-                            log_info "DATABASE_URL после пересоздания: $new_db_url"
-                            if echo "$new_db_url" | grep -q "^file:/app/database/db.sqlite"; then
-                                log_success "DATABASE_URL исправлен на абсолютный путь"
-                            else
-                                log_warning "DATABASE_URL все еще может быть неправильным: $new_db_url"
-                            fi
+                    # Проверяем DATABASE_URL после повторного пересоздания
+                    local retry_db_url=$(run_compose exec -T web sh -c 'echo "$DATABASE_URL"' 2>/dev/null || echo "")
+                    if [ -n "$retry_db_url" ]; then
+                        log_info "DATABASE_URL после повторного пересоздания: $retry_db_url"
+                        if echo "$retry_db_url" | grep -q "^file:/app/database/db.sqlite"; then
+                            log_success "DATABASE_URL исправлен на абсолютный путь после повторного пересоздания"
+                        else
+                            log_error "Не удалось исправить DATABASE_URL. Текущее значение: $retry_db_url"
+                            log_error "Проверьте docker-compose.yml вручную"
                         fi
-                    else
-                        log_error "Не удалось пересоздать контейнер web"
                     fi
                 elif echo "$initial_db_url" | grep -q "^file:/app/database/db.sqlite"; then
-                    log_success "DATABASE_URL использует правильный абсолютный путь"
+                    log_success "DATABASE_URL использует правильный абсолютный путь: $initial_db_url"
+                else
+                    log_warning "DATABASE_URL имеет неожиданный формат: $initial_db_url"
+                    log_info "Ожидается: file:/app/database/db.sqlite"
                 fi
             else
                 log_warning "Не удалось получить DATABASE_URL из контейнера"
+                log_info "Проверяем переменные окружения напрямую..."
+                run_compose exec -T web env | grep DATABASE_URL || log_warning "DATABASE_URL не найден в переменных окружения"
             fi
             
             # Проверяем логи на критические ошибки
@@ -1368,21 +1383,42 @@ test_database_write() {
         export DATABASE_URL="file:/app/database/db.sqlite" && \
         node -e "
         const { PrismaClient } = require(\"@prisma/client\");
-        const prisma = new PrismaClient();
+        const dbUrl = process.env.DATABASE_URL;
+        console.log(\"Write test - Using DATABASE_URL:\", dbUrl);
+        const prisma = new PrismaClient({
+            datasources: {
+                db: {
+                    url: dbUrl
+                }
+            }
+        });
         (async () => {
             try {
                 await prisma.\$connect();
+                console.log(\"Connected for write test\");
+                
+                // Проверяем существующие таблицы перед записью
+                const tables_before = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\" ORDER BY name;\`;
+                console.log(\"Tables before write:\", JSON.stringify(tables_before));
+                
                 // Создаем тестовую таблицу и запись
                 await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _test_write (id INTEGER PRIMARY KEY, test_value TEXT);\`;
                 await prisma.\$executeRaw\`INSERT INTO _test_write (test_value) VALUES (\"test\");\`;
                 // Читаем для гарантии записи
                 const result = await prisma.\$queryRaw\`SELECT * FROM _test_write LIMIT 1;\`;
+                console.log(\"Write test result:\", JSON.stringify(result));
+                
+                // Проверяем таблицы после записи
+                const tables_after = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\" ORDER BY name;\`;
+                console.log(\"Tables after write:\", JSON.stringify(tables_after));
+                
                 // Удаляем тестовую таблицу
                 await prisma.\$executeRaw\`DROP TABLE IF EXISTS _test_write;\`;
                 await prisma.\$disconnect();
                 console.log(\"success\");
             } catch (e) {
                 console.error(\"error:\", e.message);
+                console.error(\"Stack:\", e.stack);
                 try { await prisma.\$disconnect(); } catch (err) {}
                 process.exit(1);
             }
@@ -1408,24 +1444,38 @@ test_database_read() {
     fi
     
     # КРИТИЧНО: Устанавливаем DATABASE_URL с абсолютным путем перед запросом
+    log_info "Проверка структуры БД с явным указанием DATABASE_URL..."
     local tables=$(run_compose exec -T -w /app web sh -c '
         export DATABASE_URL="file:/app/database/db.sqlite" && \
+        echo "DATABASE_URL: $DATABASE_URL" && \
         node -e "
         const { PrismaClient } = require(\"@prisma/client\");
+        const dbUrl = process.env.DATABASE_URL;
+        console.log(\"Using DATABASE_URL:\", dbUrl);
         const prisma = new PrismaClient({
             datasources: {
                 db: {
-                    url: process.env.DATABASE_URL
+                    url: dbUrl
                 }
             }
         });
         (async () => {
             try {
                 await prisma.\$connect();
+                console.log(\"Connected to database\");
+                
+                // Проверяем, что файл БД существует и доступен
+                const dbCheck = await prisma.\$queryRaw\`SELECT 1 as check_value;\`;
+                console.log(\"Database check:\", JSON.stringify(dbCheck));
+                
+                // Получаем список таблиц
                 const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\" ORDER BY name;\`;
+                console.log(\"Tables found:\", result.length);
                 console.log(JSON.stringify(result));
             } catch (e) {
-                console.error(\"error:\", e.message);
+                console.error(\"Error:\", e.message);
+                console.error(\"Stack:\", e.stack);
+                console.log(\"[]\");
                 process.exit(1);
             } finally {
                 try { await prisma.\$disconnect(); } catch (err) {}
@@ -1708,19 +1758,27 @@ run_migrations() {
         if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
             local db_size=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
             if [ "$db_size" -gt 0 ]; then
-                # Проверяем наличие таблиц
-                local has_tables=$(run_compose exec -T -w /app web node -e "
-                    const { PrismaClient } = require('@prisma/client');
-                    const prisma = new PrismaClient();
+                # Проверяем наличие таблиц с явным указанием DATABASE_URL
+                local has_tables=$(run_compose exec -T -w /app web sh -c '
+                    export DATABASE_URL="file:/app/database/db.sqlite" && \
+                    node -e "
+                    const { PrismaClient } = require(\"@prisma/client\");
+                    const prisma = new PrismaClient({
+                        datasources: {
+                            db: {
+                                url: process.env.DATABASE_URL
+                            }
+                        }
+                    });
                     (async () => {
                         try {
                             const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
                             console.log(result.length > 0 ? 'yes' : 'no');
                         } catch (e) {
-                            console.error('no');
+                            console.error(\"error:\", e.message);
                             process.exit(1);
                         } finally {
-                            await prisma.\$disconnect();
+                            try { await prisma.\$disconnect(); } catch (err) {}
                         }
                     })();
                 " 2>/dev/null || echo "no")
@@ -1758,15 +1816,31 @@ run_migrations() {
                     export DATABASE_URL="file:/app/database/db.sqlite" && \
                     node -e "
                     const { PrismaClient } = require(\"@prisma/client\");
-                    const prisma = new PrismaClient();
+                    const prisma = new PrismaClient({
+                        datasources: {
+                            db: {
+                                url: process.env.DATABASE_URL
+                            }
+                        }
+                    });
                     (async () => {
                         try {
                             await prisma.\$connect();
+                            // Проверяем, какие таблицы уже есть
+                            const existing_tables = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\" ORDER BY name;\`;
+                            console.log(\"Existing tables:\", JSON.stringify(existing_tables));
+                            
                             // Создаем тестовую таблицу и запись
                             await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _force_init (id INTEGER PRIMARY KEY, data TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);\`;
                             await prisma.\$executeRaw\`INSERT INTO _force_init (data) VALUES (\"init_\" || strftime(\"%s\", \"now\"));\`;
                             // Читаем для гарантии записи
                             const result = await prisma.\$queryRaw\`SELECT * FROM _force_init LIMIT 1;\`;
+                            console.log(\"Test write result:\", JSON.stringify(result));
+                            
+                            // Проверяем таблицы после записи
+                            const tables_after = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\" ORDER BY name;\`;
+                            console.log(\"Tables after write:\", JSON.stringify(tables_after));
+                            
                             // Удаляем тестовую таблицу
                             await prisma.\$executeRaw\`DROP TABLE IF EXISTS _force_init;\`;
                             await prisma.\$disconnect();
@@ -1861,11 +1935,45 @@ run_migrations() {
         
         # Теперь выполняем миграции для применения всех миграций из папки migrations
         log_info "Применение миграций через prisma migrate deploy..."
+        
+        # КРИТИЧНО: Проверяем таблицы перед миграциями для диагностики
+        log_info "Проверка таблиц перед миграциями..."
+        local tables_before_migrate=$(run_compose exec -T -w /app web sh -c '
+            export DATABASE_URL="file:/app/database/db.sqlite" && \
+            node -e "
+            const { PrismaClient } = require(\"@prisma/client\");
+            const prisma = new PrismaClient({
+                datasources: {
+                    db: {
+                        url: process.env.DATABASE_URL
+                    }
+                }
+            });
+            (async () => {
+                try {
+                    await prisma.\$connect();
+                    const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\" ORDER BY name;\`;
+                    console.log(JSON.stringify(result));
+                } catch (e) {
+                    console.log(\"[]\");
+                } finally {
+                    try { await prisma.\$disconnect(); } catch (err) {}
+                }
+            })();
+            "
+        ' 2>&1 || echo "[]")
+        
+        if echo "$tables_before_migrate" | grep -qE '"name"|"User"|"Session"'; then
+            log_info "Таблицы найдены перед миграциями: $(echo "$tables_before_migrate" | grep -o '"name"' | wc -l || echo "0")"
+        else
+            log_warning "Таблицы не найдены перед миграциями (это нормально, если БД только что создана)"
+        fi
+        
         # КРИТИЧНО: Устанавливаем DATABASE_URL с абсолютным путем и рабочую директорию
         migration_output=$(run_compose exec -T -w /app web sh -c "
             cd /app && \
             export DATABASE_URL='file:/app/database/db.sqlite' && \
-            echo 'DATABASE_URL установлен: '\$DATABASE_URL && \
+            echo 'DATABASE_URL для миграций: '\$DATABASE_URL && \
             pwd && \
             ls -la /app/database/ 2>/dev/null || echo 'Директория /app/database не существует' && \
             npx prisma migrate deploy 2>&1

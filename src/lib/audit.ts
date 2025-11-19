@@ -1,4 +1,4 @@
-import { prisma } from "./db";
+import { prisma, ensureConnection } from "./db";
 
 export type AuditAction =
   | "login"
@@ -37,6 +37,14 @@ export async function logAudit(
   }
 ): Promise<void> {
   try {
+    // Убеждаемся, что подключение к БД установлено
+    const connected = await ensureConnection();
+    if (!connected) {
+      // БД еще не создана - просто пропускаем логирование
+      // Это нормально при первом запуске
+      return;
+    }
+    
     await prisma.securityAudit.create({
       data: {
         userId: options.userId || null,
@@ -46,8 +54,13 @@ export async function logAudit(
         details: options.details ? JSON.stringify(options.details) : null,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     // Не прерываем выполнение при ошибке логирования
+    // Не логируем ошибки подключения (Error code 14) как ошибки
+    if (error?.message?.includes("Error code 14") || error?.message?.includes("Unable to open the database file")) {
+      // Это нормально при первом запуске - БД еще не создана
+      return;
+    }
     console.error("Failed to log audit:", error);
   }
 }
@@ -85,6 +98,14 @@ export async function getAuditLogs(
     }
   }
 
+  // Убеждаемся, что подключение к БД установлено
+  const connected = await ensureConnection();
+  if (!connected) {
+    // БД еще не создана - возвращаем пустой массив
+    // Это нормально при первом запуске
+    return [];
+  }
+  
   const logs = await prisma.securityAudit.findMany({
     where,
     orderBy: { createdAt: "desc" },

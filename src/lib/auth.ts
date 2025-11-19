@@ -63,6 +63,15 @@ export const authOptions: NextAuthOptions = {
           const usernameOrEmail = credentials.username.trim();
           console.log(`🔍 Поиск пользователя: "${usernameOrEmail}"`);
           
+          // Убеждаемся, что подключение к БД установлено
+          const { ensureConnection } = await import("./db");
+          const connected = await ensureConnection();
+          if (!connected) {
+            // БД еще не создана - это нормально при первом запуске
+            // Выбрасываем ошибку, чтобы пользователь понял, что нужно подождать
+            throw new Error("База данных еще не создана. Пожалуйста, подождите, пока завершится установка.");
+          }
+          
           const user = await prisma.user.findFirst({
             where: {
               OR: [
@@ -256,6 +265,15 @@ export const authOptions: NextAuthOptions = {
       if (token?.id) {
         // Получаем актуальные данные пользователя из БД
         try {
+          // Убеждаемся, что подключение к БД установлено
+          const { ensureConnection } = await import("./db");
+          const connected = await ensureConnection();
+          if (!connected) {
+            // БД недоступна - используем данные из токена
+            // Это нормально при первом запуске
+            console.log("ℹ️  БД недоступна в session callback, используем данные из токена");
+          }
+          
           const user = await prisma.user.findUnique({
             where: { id: token.id as string },
             select: { email: true, name: true, role: true },
