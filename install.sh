@@ -1634,11 +1634,11 @@ test_database_read() {
                 console.log(\"Database check:\", JSON.stringify(dbCheck));
                 
                 // КРИТИЧНО: Проверяем ВСЕ таблицы, включая системные, для диагностики
-                const allTables = await prisma.\$queryRaw\`SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name;\`;
+                const allTables = await prisma.\$queryRaw\`SELECT name, type FROM sqlite_master WHERE type IN (\"table\", \"view\") ORDER BY name;\`;
                 console.log(\"All tables/views in sqlite_master:\", JSON.stringify(allTables));
                 
                 // Проверяем таблицу _prisma_migrations (Prisma создает её при миграциях)
-                const migrationsTable = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name='_prisma_migrations';\`;
+                const migrationsTable = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name=\"_prisma_migrations\";\`;
                 console.log(\"_prisma_migrations table:\", JSON.stringify(migrationsTable));
                 
                 // Получаем список пользовательских таблиц
@@ -2097,7 +2097,7 @@ run_migrations() {
                             console.log(\"Force write: Connected to database\");
                             
                             // КРИТИЧНО: Проверяем ВСЕ таблицы перед записью (для диагностики)
-                            const all_tables_before = await prisma.\$queryRaw\`SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name;\`;
+                            const all_tables_before = await prisma.\$queryRaw\`SELECT name, type FROM sqlite_master WHERE type IN (\"table\", \"view\") ORDER BY name;\`;
                             console.log(\"All tables/views before write:\", JSON.stringify(all_tables_before));
                             
                             // Проверяем, какие пользовательские таблицы уже есть
@@ -2105,7 +2105,7 @@ run_migrations() {
                             console.log(\"Existing user tables:\", JSON.stringify(existing_tables));
                             
                             // Проверяем таблицу _prisma_migrations
-                            const migrations_check = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name='_prisma_migrations';\`;
+                            const migrations_check = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name=\"_prisma_migrations\";\`;
                             console.log(\"_prisma_migrations exists:\", JSON.stringify(migrations_check));
                             
                             // Создаем тестовую таблицу и запись
@@ -2116,7 +2116,7 @@ run_migrations() {
                             console.log(\"Test write result:\", JSON.stringify(result));
                             
                             // Проверяем таблицы после записи
-                            const all_tables_after = await prisma.\$queryRaw\`SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name;\`;
+                            const all_tables_after = await prisma.\$queryRaw\`SELECT name, type FROM sqlite_master WHERE type IN (\"table\", \"view\") ORDER BY name;\`;
                             console.log(\"All tables/views after write:\", JSON.stringify(all_tables_after));
                             
                             const tables_after = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type=\"table\" AND name NOT LIKE \"sqlite_%\" AND name NOT LIKE \"_%\" ORDER BY name;\`;
@@ -2886,7 +2886,7 @@ run_migrations() {
                 }
             })();
             "
-        ' 2>/dev/null || echo "error")
+         2>/dev/null || echo "error")
         
         if echo "$force_create" | grep -q "success"; then
             log_success "Принудительное создание БД прошло успешно"
