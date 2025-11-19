@@ -75,7 +75,7 @@ while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ "$SUCCESS" = false ]; do
         echo "   (Обновление существующего сертификата)"
     fi
     
-    if docker-compose run --rm --entrypoint "" certbot sh -c "certbot certonly \
+    local certbot_output=$(docker-compose run --rm --entrypoint "" certbot sh -c "certbot certonly \
         --webroot \
         --webroot-path /var/www/certbot \
         --preferred-challenges http \
@@ -84,19 +84,35 @@ while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ "$SUCCESS" = false ]; do
         --email $EMAIL \
         --agree-tos \
         --non-interactive \
-        $FORCE_RENEWAL" 2>&1; then
+        $FORCE_RENEWAL" 2>&1)
+    
+    local certbot_exit_code=$?
+    
+    # Проверяем успешность по выводу и коду выхода
+    if echo "$certbot_output" | grep -q "Successfully received certificate\|Certificate is saved at\|Your certificate and chain have been saved" || [ "$certbot_exit_code" -eq 0 ]; then
         SUCCESS=true
         echo "   ✅ Сертификат получен успешно!"
+        # Выводим важную информацию из вывода
+        if echo "$certbot_output" | grep -q "Certificate is saved at"; then
+            echo "$certbot_output" | grep "Certificate is saved at\|Key is saved at\|This certificate expires on" | head -3
+        fi
     else
         if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
             echo "   ⚠️  Попытка $ATTEMPT не удалась, ждем 10 секунд..."
+            echo "   Вывод: $(echo "$certbot_output" | tail -3 | tr '\n' ' ')"
             sleep 10
         else
             echo "   ❌ Все попытки не удались"
+            echo "   Последний вывод: $(echo "$certbot_output" | tail -5 | tr '\n' ' ')"
         fi
     fi
     ATTEMPT=$((ATTEMPT + 1))
 done
+
+# Небольшая задержка для гарантии записи файла
+if [ "$SUCCESS" = true ]; then
+    sleep 2
+fi
 
 # Проверка сертификата
 if [ "$SUCCESS" = true ] && [ -f "certbot/live/$DOMAIN/fullchain.pem" ]; then

@@ -50,14 +50,15 @@ const nextConfig: NextConfig = {
               "default-src 'self'",
               "script-src 'self' 'unsafe-eval' 'unsafe-inline'", // Next.js requires unsafe-eval and unsafe-inline
               "style-src 'self' 'unsafe-inline'", // Tailwind requires unsafe-inline
-              "img-src 'self' data: blob: https:",
-              "font-src 'self' data:",
-              "connect-src 'self'",
+              "img-src 'self' data: blob: https: http:",
+              "font-src 'self' data: https: http:",
+              "connect-src 'self' https: http:",
               "frame-ancestors 'none'",
               "base-uri 'self'",
               "form-action 'self'",
               "object-src 'none'",
-              "upgrade-insecure-requests",
+              // Removed upgrade-insecure-requests to allow HTTP during development
+              // It will be added by Nginx for HTTPS connections
             ].join("; "),
           },
         ],

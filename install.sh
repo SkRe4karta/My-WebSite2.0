@@ -947,22 +947,68 @@ ensure_admin_user() {
     log_info "Запуск db:init-admin..."
     local init_output=$(run_compose exec -T web npm run db:init-admin 2>&1 | tee -a "$LOG_FILE" || echo "")
     
-    if echo "$init_output" | grep -qi "✅\|успешно\|created\|exists"; then
+    if echo "$init_output" | grep -qi "✅\|успешно\|created\|exists\|Администратор"; then
         log_success "Команда db:init-admin выполнена успешно"
+        
+        # Принудительно синхронизируем файл БД после создания администратора
+        sync_database_file
+        sleep 2
+        
+        # Проверяем, что администратор действительно создан
+        local admin_check=$(run_compose exec -T -w /app web node -e "
+            const { PrismaClient } = require('@prisma/client');
+            const prisma = new PrismaClient();
+            (async () => {
+                try {
+                    const admin = await prisma.user.findFirst({ where: { role: 'admin' }, select: { email: true, name: true } });
+                    if (admin) { console.log('admin_found:' + admin.email); } else { console.log('admin_not_found'); }
+                } catch (e) { console.error('check_error:', e.message); process.exit(1); } finally { await prisma.\$disconnect(); }
+            })();
+        " 2>/dev/null || echo "check_failed")
+        
+        if echo "$admin_check" | grep -q "admin_found"; then
+            local admin_email=$(echo "$admin_check" | grep -o "admin_found:[^:]*" | cut -d: -f2 || echo "")
+            log_success "Администратор найден в БД: $admin_email"
+        else
+            log_warning "Администратор не найден в БД после db:init-admin"
+        fi
     else
         log_warning "db:init-admin завершился с предупреждением или ошибкой"
-        log_info "Вывод: $(echo "$init_output" | head -5 | tr '\n' ' ')"
+        log_info "Вывод: $(echo "$init_output" | tail -10 | tr '\n' ' ')"
     fi
     
     # Исправляем пользователя (гарантирует правильный хеш и name)
     log_info "Запуск db:force-fix-user (гарантирует правильный пароль и name)..."
     local fix_output=$(run_compose exec -T web npm run db:force-fix-user 2>&1 | tee -a "$LOG_FILE" || echo "")
     
-    if echo "$fix_output" | grep -qi "✅\|успешно\|исправлен\|создан\|валиден"; then
+    if echo "$fix_output" | grep -qi "✅\|успешно\|исправлен\|создан\|валиден\|Администратор"; then
         log_success "Команда db:force-fix-user выполнена успешно"
+        
+        # Синхронизируем файл БД после исправления
+        sync_database_file
+        sleep 2
+        
+        # Проверяем размер файла БД
+        local db_size_after_admin=0
+        if [ -f "database/db.sqlite" ]; then
+            db_size_after_admin=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
+        fi
+        if run_compose ps web 2>/dev/null | grep -q "Up"; then
+            local container_size_after_admin=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
+            if [ "$container_size_after_admin" -gt "$db_size_after_admin" ]; then
+                db_size_after_admin=$container_size_after_admin
+                sync_database_file
+            fi
+        fi
+        
+        if [ "$db_size_after_admin" -gt 0 ]; then
+            log_success "БД содержит данные после создания администратора (размер: ${db_size_after_admin} байт)"
+        else
+            log_warning "Размер файла БД все еще 0 байт после создания администратора"
+        fi
     else
         log_warning "db:force-fix-user завершился с предупреждением"
-        log_info "Вывод: $(echo "$fix_output" | head -5 | tr '\n' ' ')"
+        log_info "Вывод: $(echo "$fix_output" | tail -10 | tr '\n' ' ')"
     fi
     
     # Ждем немного для синхронизации
@@ -1318,18 +1364,105 @@ run_migrations() {
     # Проверяем, что DATABASE_URL корректный
     if [ -z "$current_db_url" ]; then
         log_warning "DATABASE_URL не установлен в контейнере!"
-        log_info "Устанавливаем DATABASE_URL=file:./database/db.sqlite"
-        run_compose exec -T web sh -c 'export DATABASE_URL="file:./database/db.sqlite"' 2>/dev/null || true
+        log_info "Устанавливаем DATABASE_URL=file:/app/database/db.sqlite"
+        run_compose exec -T web sh -c 'export DATABASE_URL="file:/app/database/db.sqlite"' 2>/dev/null || true
+        current_db_url="file:/app/database/db.sqlite"
     fi
     
-    # Если DATABASE_URL относительный, это нормально для Prisma (работает из рабочей директории /app)
+    # Исправляем относительный путь на абсолютный
     if echo "$current_db_url" | grep -q "^file:\./"; then
-        log_info "DATABASE_URL использует относительный путь, это нормально для Prisma (работает из /app)"
-        log_info "Prisma будет использовать путь: /app/database/db.sqlite"
+        log_warning "DATABASE_URL использует относительный путь, исправляем на абсолютный..."
+        log_info "Исправляем: $current_db_url -> file:/app/database/db.sqlite"
+        run_compose exec -T web sh -c 'export DATABASE_URL="file:/app/database/db.sqlite"' 2>/dev/null || true
+        current_db_url="file:/app/database/db.sqlite"
+    fi
+    
+    # Проверяем, что DATABASE_URL использует правильный путь
+    if echo "$current_db_url" | grep -q "^file:/app/database/db.sqlite"; then
+        log_success "DATABASE_URL использует правильный абсолютный путь: $current_db_url"
     elif echo "$current_db_url" | grep -q "^file:/"; then
         log_info "DATABASE_URL использует абсолютный путь: $current_db_url"
     else
         log_warning "DATABASE_URL имеет необычный формат: $current_db_url"
+        log_info "Исправляем на: file:/app/database/db.sqlite"
+        run_compose exec -T web sh -c 'export DATABASE_URL="file:/app/database/db.sqlite"' 2>/dev/null || true
+    fi
+    
+    # КРИТИЧНО: Проверяем, не создана ли БД в корне контейнера
+    log_info "Проверка наличия БД в неправильной директории..."
+    if run_compose exec -T web test -f /app/db.sqlite 2>/dev/null; then
+        log_warning "Обнаружен файл БД в корне контейнера (/app/db.sqlite)!"
+        log_info "Перемещаем в правильную директорию..."
+        
+        # Проверяем размер файла
+        local wrong_db_size=$(run_compose exec -T web stat -c%s /app/db.sqlite 2>/dev/null || echo "0")
+        
+        if [ "$wrong_db_size" -gt 0 ]; then
+            log_info "Файл БД имеет размер ${wrong_db_size} байт, перемещаем..."
+            
+            # Если правильный файл уже существует, сравниваем размеры
+            if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+                local correct_db_size=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
+                
+                if [ "$wrong_db_size" -gt "$correct_db_size" ]; then
+                    log_info "Файл в корне больше, используем его..."
+                    run_compose exec -T web mv /app/db.sqlite /app/database/db.sqlite 2>/dev/null || \
+                    run_compose exec -T --user root web mv /app/db.sqlite /app/database/db.sqlite 2>/dev/null || true
+                else
+                    log_info "Файл в правильной директории больше или равен, удаляем файл из корня..."
+                    run_compose exec -T web rm -f /app/db.sqlite 2>/dev/null || \
+                    run_compose exec -T --user root web rm -f /app/db.sqlite 2>/dev/null || true
+                fi
+            else
+                # Правильного файла нет, перемещаем
+                run_compose exec -T web mv /app/db.sqlite /app/database/db.sqlite 2>/dev/null || \
+                run_compose exec -T --user root web mv /app/db.sqlite /app/database/db.sqlite 2>/dev/null || true
+                
+                if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+                    log_success "Файл БД перемещен в правильную директорию"
+                    run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || true
+                else
+                    log_error "Не удалось переместить файл БД"
+                fi
+            fi
+        else
+            log_info "Файл БД в корне пустой, удаляем его..."
+            run_compose exec -T web rm -f /app/db.sqlite 2>/dev/null || \
+            run_compose exec -T --user root web rm -f /app/db.sqlite 2>/dev/null || true
+        fi
+    fi
+    
+    # Проверяем наличие БД в корне на хосте (если есть)
+    if [ -f "db.sqlite" ]; then
+        log_warning "Обнаружен файл БД в корне проекта на хосте (db.sqlite)!"
+        log_info "Перемещаем в правильную директорию..."
+        
+        local host_wrong_db_size=$(stat -f%z "db.sqlite" 2>/dev/null || stat -c%s "db.sqlite" 2>/dev/null || echo "0")
+        
+        if [ "$host_wrong_db_size" -gt 0 ]; then
+            if [ -f "database/db.sqlite" ]; then
+                local host_correct_db_size=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
+                
+                if [ "$host_wrong_db_size" -gt "$host_correct_db_size" ]; then
+                    log_info "Файл в корне больше, перемещаем его..."
+                    mv db.sqlite database/db.sqlite 2>/dev/null || sudo mv db.sqlite database/db.sqlite 2>/dev/null || true
+                    chmod 777 database/db.sqlite 2>/dev/null || sudo chmod 777 database/db.sqlite 2>/dev/null || true
+                else
+                    log_info "Файл в правильной директории больше или равен, удаляем файл из корня..."
+                    rm -f db.sqlite 2>/dev/null || sudo rm -f db.sqlite 2>/dev/null || true
+                fi
+            else
+                mv db.sqlite database/db.sqlite 2>/dev/null || sudo mv db.sqlite database/db.sqlite 2>/dev/null || true
+                chmod 777 database/db.sqlite 2>/dev/null || sudo chmod 777 database/db.sqlite 2>/dev/null || true
+                
+                if [ -f "database/db.sqlite" ]; then
+                    log_success "Файл БД перемещен в правильную директорию на хосте"
+                fi
+            fi
+        else
+            log_info "Файл БД в корне пустой, удаляем его..."
+            rm -f db.sqlite 2>/dev/null || sudo rm -f db.sqlite 2>/dev/null || true
+        fi
     fi
     
     # КРИТИЧНО: Убеждаемся, что директория доступна для записи с максимальными правами
@@ -1356,6 +1489,10 @@ run_migrations() {
     # КРИТИЧНО: Устанавливаем максимальные права перед миграциями для гарантии
     log_info "Финальная установка максимальных прав перед миграциями..."
     if run_compose ps web 2>/dev/null | grep -q "Up"; then
+        # КРИТИЧНО: Убеждаемся, что директория существует и доступна
+        run_compose exec -T --user root web mkdir -p /app/database 2>/dev/null || true
+        run_compose exec -T --user root web chmod 777 /app/database 2>/dev/null || true
+        
         # Устанавливаем права через root для гарантии
         run_compose exec -T --user root web chmod 777 /app/database 2>/dev/null || true
         if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
@@ -1365,8 +1502,26 @@ run_migrations() {
         run_compose exec -T --user root web chown -R nextjs:nodejs /app/database 2>/dev/null || \
         run_compose exec -T --user root web chown -R 1001:1001 /app/database 2>/dev/null || \
         run_compose exec -T --user root web chown -R root:root /app/database 2>/dev/null || true
+        
+        # КРИТИЧНО: Проверяем и устанавливаем DATABASE_URL с абсолютным путем
+        log_info "Проверка и установка DATABASE_URL с абсолютным путем..."
+        local current_db_url_check=$(run_compose exec -T -w /app web sh -c 'cd /app && echo "$DATABASE_URL"' 2>/dev/null || echo "")
+        if [ -z "$current_db_url_check" ] || ! echo "$current_db_url_check" | grep -q "file:/app/database/db.sqlite"; then
+            log_warning "DATABASE_URL не установлен правильно, устанавливаем явно..."
+            # Обновляем .env файл если он существует
+            if [ -f ".env" ]; then
+                if grep -q "DATABASE_URL" .env; then
+                    sed -i 's|DATABASE_URL=.*|DATABASE_URL="file:/app/database/db.sqlite"|g' .env
+                    sed -i 's|DATABASE_URL=".*"|DATABASE_URL="file:/app/database/db.sqlite"|g' .env
+                else
+                    echo 'DATABASE_URL="file:/app/database/db.sqlite"' >> .env
+                fi
+                log_info "Обновлен .env файл с правильным DATABASE_URL"
+            fi
+        fi
     fi
     # Также на хосте
+    mkdir -p database 2>/dev/null || true
     chmod 777 database 2>/dev/null || sudo chmod 777 database 2>/dev/null || true
     if [ -f "database/db.sqlite" ]; then
         chmod 777 database/db.sqlite 2>/dev/null || sudo chmod 777 database/db.sqlite 2>/dev/null || true
@@ -1385,39 +1540,173 @@ run_migrations() {
     while [ $attempt -le $MAX_RETRIES ] && [ "$success" = false ]; do
         log_info "Попытка $attempt из $MAX_RETRIES..."
         
-        # КРИТИЧНО: Используем prisma db push для гарантированного создания БД перед миграциями
-        log_info "Принудительное создание структуры БД через prisma db push..."
-        
-        # prisma db push создает БД из schema.prisma напрямую (без миграций)
-        local db_push_output=$(run_compose exec -T -w /app web sh -c "
-            cd /app && \
-            npx prisma db push --accept-data-loss --skip-generate 2>&1
-        " 2>&1 | tee -a "$LOG_FILE" || echo "")
-        
-        if echo "$db_push_output" | grep -q "Your database is now in sync\|Database is up to date\|Pushing\|Applied\|already in sync"; then
-            log_success "Структура БД создана через prisma db push"
-            
-            # Ждем записи на диск
-            sleep 3
-            run_compose exec -T web sync 2>/dev/null || true
-            sync 2>/dev/null || true
-            
-            # Устанавливаем максимальные права на созданный файл БД
-            if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
-                run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || true
+        # КРИТИЧНО: Проверяем, существует ли БД. Если нет - используем prisma db push для создания
+        log_info "Проверка существования БД..."
+        local db_exists=false
+        if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+            local db_size=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
+            if [ "$db_size" -gt 0 ]; then
+                # Проверяем наличие таблиц
+                local has_tables=$(run_compose exec -T -w /app web node -e "
+                    const { PrismaClient } = require('@prisma/client');
+                    const prisma = new PrismaClient();
+                    (async () => {
+                        try {
+                            const result = await prisma.\$queryRaw\`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%';\`;
+                            console.log(result.length > 0 ? 'yes' : 'no');
+                        } catch (e) {
+                            console.error('no');
+                            process.exit(1);
+                        } finally {
+                            await prisma.\$disconnect();
+                        }
+                    })();
+                " 2>/dev/null || echo "no")
+                
+                if echo "$has_tables" | grep -q "yes"; then
+                    db_exists=true
+                    log_info "БД уже существует и содержит таблицы"
+                else
+                    log_info "БД существует, но таблицы отсутствуют"
+                fi
             fi
+        fi
+        
+        if [ "$db_exists" = false ]; then
+            # БД не существует или пустая - создаем через prisma db push
+            log_info "Создание структуры БД через prisma db push..."
             
-            # Синхронизируем файл
-            sync_database_file
-        else
-            log_warning "prisma db push не завершился успешно или БД уже существует"
-            log_info "Вывод db push: $(echo "$db_push_output" | head -5 | tr '\n' ' ')"
+            # prisma db push создает БД из schema.prisma напрямую (без миграций)
+            # КРИТИЧНО: Устанавливаем DATABASE_URL с абсолютным путем и рабочую директорию
+            local db_push_output=$(run_compose exec -T -w /app web sh -c "
+                cd /app && \
+                export DATABASE_URL='file:/app/database/db.sqlite' && \
+                echo 'DATABASE_URL установлен: '\$DATABASE_URL && \
+                pwd && \
+                ls -la /app/database/ 2>/dev/null || echo 'Директория /app/database не существует' && \
+                npx prisma db push --accept-data-loss --skip-generate 2>&1
+            " 2>&1 | tee -a "$LOG_FILE" || echo "")
+            
+            if echo "$db_push_output" | grep -q "Your database is now in sync\|Database is up to date\|Pushing\|Applied\|already in sync"; then
+                log_success "Структура БД создана через prisma db push"
+                
+                # КРИТИЧНО: Принудительно создаем запись в БД для гарантии записи на диск
+                log_info "Принудительное создание записи в БД для гарантии записи на диск..."
+                local force_write_after_push=$(run_compose exec -T -w /app web sh -c "
+                    cd /app && \
+                    export DATABASE_URL='file:/app/database/db.sqlite' && \
+                    node -e \"
+                    const { PrismaClient } = require('@prisma/client');
+                    const prisma = new PrismaClient();
+                    (async () => {
+                        try {
+                            await prisma.\$connect();
+                            // Создаем тестовую таблицу и запись
+                            await prisma.\$executeRaw\`CREATE TABLE IF NOT EXISTS _force_init (id INTEGER PRIMARY KEY, data TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);\`;
+                            await prisma.\$executeRaw\`INSERT INTO _force_init (data) VALUES ('init_' || strftime('%s', 'now'));\`;
+                            // Читаем для гарантии записи
+                            const result = await prisma.\$queryRaw\`SELECT * FROM _force_init LIMIT 1;\`;
+                            // Удаляем тестовую таблицу
+                            await prisma.\$executeRaw\`DROP TABLE IF EXISTS _force_init;\`;
+                            await prisma.\$disconnect();
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                            console.log('force_write_success');
+                        } catch (e) {
+                            console.error('force_write_error:', e.message);
+                            await prisma.\$disconnect().catch(() => {});
+                            process.exit(1);
+                        }
+                    })();
+                    \"
+                " 2>&1 || echo "force_write_failed")
+                
+                if echo "$force_write_after_push" | grep -q "force_write_success"; then
+                    log_success "Принудительная запись в БД после db push выполнена успешно"
+                else
+                    log_warning "Принудительная запись не выполнена: $(echo "$force_write_after_push" | head -3 | tr '\n' ' ')"
+                fi
+                
+                # Ждем записи на диск
+                sleep 3
+                run_compose exec -T web sync 2>/dev/null || true
+                sync 2>/dev/null || true
+                
+                # Устанавливаем максимальные права на созданный файл БД
+                if run_compose exec -T web test -f /app/database/db.sqlite 2>/dev/null; then
+                    run_compose exec -T --user root web chmod 777 /app/database/db.sqlite 2>/dev/null || true
+                fi
+                
+                # Синхронизируем файл
+                sync_database_file
+                
+                # Проверяем размер файла после записи
+                local db_size_after_push=0
+                if [ -f "database/db.sqlite" ]; then
+                    db_size_after_push=$(stat -f%z "database/db.sqlite" 2>/dev/null || stat -c%s "database/db.sqlite" 2>/dev/null || echo "0")
+                fi
+                if run_compose ps web 2>/dev/null | grep -q "Up"; then
+                    local container_size_after_push=$(run_compose exec -T web stat -c%s /app/database/db.sqlite 2>/dev/null || echo "0")
+                    if [ "$container_size_after_push" -gt "$db_size_after_push" ]; then
+                        db_size_after_push=$container_size_after_push
+                        sync_database_file
+                    fi
+                fi
+                
+                if [ "$db_size_after_push" -gt 0 ]; then
+                    log_success "БД создана и содержит данные (размер: ${db_size_after_push} байт)"
+                else
+                    log_warning "БД создана, но размер файла все еще 0 байт после принудительной записи"
+                fi
+                
+                # КРИТИЧНО: После db push нужно пометить все миграции как примененные, чтобы migrate deploy не выдавал P3005
+                log_info "Пометка миграций как примененных (baseline)..."
+                
+                # Получаем список всех миграций и помечаем каждую как примененную
+                local migration_dirs=$(run_compose exec -T -w /app web sh -c "ls -d prisma/migrations/*/ 2>/dev/null | sed 's|prisma/migrations/||' | sed 's|/$||' | grep -v 'migration_lock.toml' || echo ''" 2>/dev/null || echo "")
+                
+                if [ -n "$migration_dirs" ]; then
+                    local resolved_count=0
+                    for migration_dir in $migration_dirs; do
+                        # Используем полное имя миграции (timestamp_name)
+                        local migration_name="$migration_dir"
+                    log_info "Пометка миграции $migration_name как примененной..."
+                    local resolve_output=$(run_compose exec -T -w /app web sh -c "
+                        cd /app && \
+                        export DATABASE_URL='file:/app/database/db.sqlite' && \
+                        npx prisma migrate resolve --applied $migration_name 2>&1
+                    " 2>&1 | tee -a "$LOG_FILE" || echo "resolve_failed")
+                        
+                        if echo "$resolve_output" | grep -q "marked as applied\|Migration.*marked as applied\|resolved"; then
+                            resolved_count=$((resolved_count + 1))
+                            log_success "Миграция $migration_name помечена как примененная"
+                        else
+                            log_warning "Не удалось пометить миграцию $migration_name: $(echo "$resolve_output" | head -2 | tr '\n' ' ')"
+                        fi
+                    done
+                    
+                    if [ "$resolved_count" -gt 0 ]; then
+                        log_success "Помечено миграций как примененных: $resolved_count"
+                    else
+                        log_warning "Не удалось пометить миграции как примененные"
+                    fi
+                else
+                    log_warning "Не найдены миграции для пометки"
+                fi
+            else
+                log_warning "prisma db push не завершился успешно"
+                log_info "Вывод db push: $(echo "$db_push_output" | head -5 | tr '\n' ' ')"
+            fi
         fi
         
         # Теперь выполняем миграции для применения всех миграций из папки migrations
         log_info "Применение миграций через prisma migrate deploy..."
+        # КРИТИЧНО: Устанавливаем DATABASE_URL с абсолютным путем и рабочую директорию
         migration_output=$(run_compose exec -T -w /app web sh -c "
             cd /app && \
+            export DATABASE_URL='file:/app/database/db.sqlite' && \
+            echo 'DATABASE_URL установлен: '\$DATABASE_URL && \
+            pwd && \
+            ls -la /app/database/ 2>/dev/null || echo 'Директория /app/database не существует' && \
             npx prisma migrate deploy 2>&1
         " 2>&1 | tee -a "$LOG_FILE" || echo "")
         
@@ -1425,6 +1714,53 @@ run_migrations() {
         if echo "$migration_output" | grep -q "successfully applied\|All migrations\|migrations have been applied\|No pending migrations\|already applied"; then
             success=true
             log_success "Миграции применены успешно"
+        # Обрабатываем ошибку P3005 (БД не пустая, но миграции не применены)
+        elif echo "$migration_output" | grep -q "P3005\|database schema is not empty"; then
+            log_warning "Обнаружена ошибка P3005: БД не пустая, но миграции не помечены как примененные"
+            log_info "Помечаем все миграции как примененные (baseline)..."
+            
+            # Помечаем все миграции как примененные
+            local migration_dirs=$(run_compose exec -T -w /app web sh -c "ls -d prisma/migrations/*/ 2>/dev/null | sed 's|prisma/migrations/||' | sed 's|/$||' | grep -v 'migration_lock.toml' || echo ''" 2>/dev/null || echo "")
+            
+            if [ -n "$migration_dirs" ]; then
+                local resolved_count=0
+                for migration_dir in $migration_dirs; do
+                    # Используем полное имя миграции (timestamp_name)
+                    local migration_name="$migration_dir"
+                    log_info "Пометка миграции $migration_name как примененной..."
+                    local resolve_output=$(run_compose exec -T -w /app web sh -c "
+                        cd /app && \
+                        export DATABASE_URL='file:/app/database/db.sqlite' && \
+                        npx prisma migrate resolve --applied $migration_name 2>&1
+                    " 2>&1 | tee -a "$LOG_FILE" || echo "resolve_failed")
+                    
+                    if echo "$resolve_output" | grep -q "marked as applied\|Migration.*marked as applied\|resolved"; then
+                        resolved_count=$((resolved_count + 1))
+                        log_success "Миграция $migration_name помечена как примененная"
+                    else
+                        log_warning "Не удалось пометить миграцию $migration_name: $(echo "$resolve_output" | head -2 | tr '\n' ' ')"
+                    fi
+                done
+                
+                if [ "$resolved_count" -gt 0 ]; then
+                    log_success "Помечено миграций как примененных: $resolved_count"
+                    log_info "Повторная попытка применения миграций..."
+                    
+                    # Повторно пытаемся применить миграции
+                    migration_output=$(run_compose exec -T -w /app web sh -c "
+                        cd /app && \
+                        npx prisma migrate deploy 2>&1
+                    " 2>&1 | tee -a "$LOG_FILE" || echo "")
+                    
+                    if echo "$migration_output" | grep -q "successfully applied\|All migrations\|migrations have been applied\|No pending migrations\|already applied"; then
+                        success=true
+                        log_success "Миграции применены успешно после baseline"
+                    fi
+                fi
+            fi
+        fi
+        
+        if [ "$success" = true ]; then
             
             # КРИТИЧНО: Принудительно создаем запись в БД для гарантии записи на диск
             log_info "Принудительное создание записи в БД для гарантии записи на диск..."

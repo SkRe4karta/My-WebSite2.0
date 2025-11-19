@@ -62,7 +62,7 @@ RUN if [ -d "scripts" ]; then \
     fi
 
 # Build environment variables
-ENV DATABASE_URL="file:./database/db.sqlite"
+ENV DATABASE_URL="file:/app/database/db.sqlite"
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
 ENV NODE_ENV=production
