@@ -2861,7 +2861,9 @@ run_migrations() {
         log_info "Пробуем принудительно создать БД через Prisma..."
         
         # Пробуем принудительно создать БД
-        local force_create=$(run_compose exec -T -w /app web sh -c 'export DATABASE_URL="file:/app/database/db.sqlite" && node -e "
+        local force_create=$(run_compose exec -T -w /app web sh -c '
+            export DATABASE_URL="file:/app/database/db.sqlite" && \
+            node -e "
             const { PrismaClient } = require(\"@prisma/client\");
             const prisma = new PrismaClient({
                 datasources: {
@@ -2883,7 +2885,8 @@ run_migrations() {
                     try { await prisma.\$disconnect(); } catch (err) {}
                 }
             })();
-        "' 2>/dev/null || echo "error")
+            "
+        ' 2>/dev/null || echo "error")
         
         if echo "$force_create" | grep -q "success"; then
             log_success "Принудительное создание БД прошло успешно"
