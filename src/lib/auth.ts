@@ -1,4 +1,4 @@
-import NextAuth from "next-auth/next";
+import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 // PrismaAdapter не используется при JWT strategy
 // import { PrismaAdapter } from "@auth/prisma-adapter";
@@ -60,7 +60,7 @@ export const authOptions: NextAuthOptions = {
           }
 
           // Ищем пользователя по email или name (username может быть любым из них)
-          const usernameOrEmail = credentials.username.trim();
+          const usernameOrEmail = (credentials.username as string)?.trim() || "";
           console.log(`🔍 Поиск пользователя: "${usernameOrEmail}"`);
           
           // Убеждаемся, что подключение к БД установлено
@@ -99,7 +99,7 @@ export const authOptions: NextAuthOptions = {
 
           console.log(`✅ Пользователь найден: ${user.email} (name: ${user.name || 'не задано'})`);
 
-          const enteredPassword = credentials.password?.trim();
+          const enteredPassword = (credentials.password as string)?.trim() || "";
           
           if (!enteredPassword) {
             recordFailedAttempt(clientIP);
@@ -340,4 +340,5 @@ export const authOptions: NextAuthOptions = {
   },
 };
 
+// @ts-ignore - NextAuth v5 beta type issues
 export const { handlers: authHandlers, auth, signIn, signOut } = NextAuth(authOptions);

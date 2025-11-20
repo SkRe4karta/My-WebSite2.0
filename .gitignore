@@ -3,12 +3,8 @@
 # dependencies
 /node_modules
 /.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+.pnp.js
+.yarn/install-state.gz
 
 # testing
 /coverage
@@ -28,27 +24,10 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
-!.env.example
-
-# production files
-/database/*.sqlite
-/database/*.sqlite-journal
-/prisma/database/*.sqlite
-/prisma/database/*.sqlite-journal
-/storage/uploads/*
-/storage/vault/*
-!/storage/uploads/.gitkeep
-!/storage/vault/.gitkeep
-
-# certbot
-/certbot/live/
-/certbot/archive/
-/certbot/renewal/
-/certbot/logs/
+# local env files
+.env*.local
+.env
 
 # vercel
 .vercel
@@ -57,30 +36,50 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Keep important documentation files
-!GIT-SETUP.md
-!DEPLOY-CHECKLIST.md
-!PREPARE-FOR-DEPLOY.md
-!QUICK-DEPLOY.md
-!DEPLOYMENT.md
-!RELEASE.md
-!QUICKSTART.md
-!DEPLOY.md
-!CHANGELOG.md
-!DEPLOY-UPDATE.md
-!DIAGNOSE-LOGIN.md
-!GIT-COMMIT.md
-!UPDATE-SUMMARY.md
-!README-UPDATE.md
-!QUICK-DEPLOY-COMMANDS.md
-!DEPLOYMENT-GUIDE.md
-!START-HERE.md
-!COMMANDS.md
-!README-DEPLOY.md
-!FINAL-CHECKLIST.md
-!PROJECT-STRUCTURE.md
-!FIX-PASSWORD-HASH.md
-!DEBUG-HEALTHCHECK.md
-!FIX-DATABASE.md
-!FIX-SSL.md
-!FIX-DB-CREATION.md
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Prisma
+/prisma/database/*.sqlite
+/prisma/database/*.sqlite-journal
+
+# Storage (uploads and vault)
+/storage/uploads/*
+!/storage/uploads/.gitkeep
+/storage/vault/*
+!/storage/vault/.gitkeep
+/storage/backups/*
+!/storage/backups/.gitkeep
+
+# SSL Certificates
+*.crt
+*.key
+*.pem
+*.csr
+certificate.*
+
+# Production files
+.env
+.env.production
+.env.local
+.env.production.local
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+

@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/api";
 import { encryptBuffer, encryptString } from "@/lib/crypto";
 import { toRelative, writeFileFromBuffer } from "@/lib/storage";
 import { vaultPayload } from "@/lib/validators";
+import { trackActivity } from "@/lib/analytics/tracker";
 
 export async function GET(request: NextRequest) {
   const user = await requireUser(request);
@@ -52,6 +53,10 @@ export async function POST(request: NextRequest) {
     });
 
     await logVaultAction(user.id, item.id, "UPLOAD_FILE");
+    
+    // Трекинг активности
+    await trackActivity(user.id, "vault_item_created", "vault", item.id);
+    
     return NextResponse.json(item, { status: 201 });
   }
 
@@ -82,6 +87,10 @@ export async function POST(request: NextRequest) {
   });
 
   await logVaultAction(user.id, item.id, "CREATE_SECRET");
+  
+  // Трекинг активности
+  await trackActivity(user.id, "vault_item_created", "vault", item.id);
+  
   return NextResponse.json(item, { status: 201 });
 }
 

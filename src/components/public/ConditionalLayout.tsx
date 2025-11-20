@@ -15,7 +15,7 @@ export default function ConditionalLayout({ children }: { children: React.ReactN
   return (
     <>
       <NavBar />
-      <div className="flex-1">{children}</div>
+      <div className="flex-1 w-full">{children}</div>
       <Footer />
     </>
   );

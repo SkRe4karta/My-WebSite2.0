@@ -1,0 +1,73 @@
+version: '3.8'
+
+# Production docker-compose configuration
+# Использование: docker-compose -f docker-compose.prod.yml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mywebsite-postgres-prod
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mywebsite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-mywebsite}
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+    networks:
+      - mywebsite-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mywebsite}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mywebsite-app-prod
+    restart: always
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mywebsite}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mywebsite}?schema=public
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-https://zelyonkin.ru}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-zelyonkin.d@gmail.com}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-skre4karta}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      NODE_ENV: production
+    volumes:
+      - ./storage:/app/storage
+      - ./prisma:/app/prisma
+    networks:
+      - mywebsite-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data_prod:
+    driver: local
+
+networks:
+  mywebsite-network:
+    driver: bridge
+

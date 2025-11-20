@@ -28,6 +28,9 @@ export default function NotesBoard() {
   const [loading, setLoading] = useState(true);
   const [editor, setEditor] = useState({ ...defaultNote });
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [showVersions, setShowVersions] = useState(false);
+  const [versions, setVersions] = useState<any[]>([]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -39,7 +42,21 @@ export default function NotesBoard() {
 
   useEffect(() => {
     refresh();
+    // Загружаем шаблоны
+    fetch("/api/notes/templates")
+      .then((res) => res.json())
+      .then((data) => setTemplates(data))
+      .catch((err) => console.error("Failed to load templates:", err));
   }, [refresh]);
+
+  useEffect(() => {
+    if (activeId && showVersions) {
+      fetch(`/api/notes/${activeId}/versions`)
+        .then((res) => res.json())
+        .then((data) => setVersions(data))
+        .catch((err) => console.error("Failed to load versions:", err));
+    }
+  }, [activeId, showVersions]);
 
   const filtered = useMemo(() => {
     if (!query) return notes;
@@ -100,6 +117,36 @@ export default function NotesBoard() {
     }
     setEditor((prev) => ({ ...prev, attachments: [...(prev.attachments ?? []), ...uploaded] }));
   }, []);
+
+  const exportNote = async (format: "markdown" | "pdf") => {
+    if (!activeId) return;
+    const res = await fetch(`/api/notes/${activeId}/export?format=${format}`);
+    if (format === "markdown") {
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${editor.title || "note"}.md`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    }
+  };
+
+  const applyTemplate = async (templateId: string) => {
+    const template = templates.find((t) => t.id === templateId);
+    if (template) {
+      setEditor({ ...editor, content: template.content });
+    }
+  };
+
+  const addToFavorites = async () => {
+    if (!activeId) return;
+    await fetch("/api/favorites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entityType: "note", entityId: activeId }),
+    });
+  };
 
   return (
     <div className="grid gap-4 sm:gap-6 lg:grid-cols-[240px_1fr] h-[calc(100vh-200px)]">
@@ -226,6 +273,70 @@ export default function NotesBoard() {
               </div>
             </div>
           )}
+          {/* Дополнительные функции */}
+          {activeId && (
+            <div className="flex flex-wrap gap-2 p-3 rounded-xl border border-[#4CAF50]/20 bg-[#333]">
+              <button
+                onClick={() => exportNote("markdown")}
+                className="px-3 py-1.5 text-xs rounded bg-[#4CAF50]/10 text-[#4CAF50] border border-[#4CAF50]/20 hover:bg-[#4CAF50]/20"
+              >
+                Экспорт MD
+              </button>
+              <button
+                onClick={() => setShowVersions(!showVersions)}
+                className="px-3 py-1.5 text-xs rounded bg-[#4CAF50]/10 text-[#4CAF50] border border-[#4CAF50]/20 hover:bg-[#4CAF50]/20"
+              >
+                Версии
+              </button>
+              <button
+                onClick={addToFavorites}
+                className="px-3 py-1.5 text-xs rounded bg-[#4CAF50]/10 text-[#4CAF50] border border-[#4CAF50]/20 hover:bg-[#4CAF50]/20"
+              >
+                ⭐ В избранное
+              </button>
+            </div>
+          )}
+
+          {/* Шаблоны */}
+          {templates.length > 0 && !activeId && (
+            <div className="p-3 rounded-xl border border-[#4CAF50]/20 bg-[#333]">
+              <label className="text-xs uppercase text-[#cccccc] mb-2 block">Шаблоны</label>
+              <select
+                onChange={(e) => applyTemplate(e.target.value)}
+                className="w-full rounded-xl border border-[#4CAF50]/40 bg-[#444] px-4 py-2 text-sm text-white"
+              >
+                <option value="">Выберите шаблон...</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Версии */}
+          {showVersions && versions.length > 0 && (
+            <div className="p-3 rounded-xl border border-[#4CAF50]/20 bg-[#333] max-h-48 overflow-y-auto">
+              <p className="text-xs uppercase text-[#cccccc] mb-2">История версий</p>
+              <div className="space-y-2">
+                {versions.map((version) => (
+                  <div
+                    key={version.id}
+                    className="p-2 rounded bg-[#444] border border-[#4CAF50]/10 cursor-pointer hover:border-[#4CAF50]/30"
+                    onClick={() => {
+                      setEditor({ ...editor, title: version.title, content: version.content });
+                      setShowVersions(false);
+                    }}
+                  >
+                    <p className="text-xs text-white">Версия {version.version}</p>
+                    <p className="text-xs text-[#888]">{new Date(version.createdAt).toLocaleString("ru-RU")}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="grid gap-4 md:grid-cols-2">
             <button
               onClick={saveNote}

@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/api";
 import { ideaPayload } from "@/lib/validators";
+import { trackActivity } from "@/lib/analytics/tracker";
 
 export async function GET(request: NextRequest) {
   const user = await requireUser(request);
@@ -34,5 +35,9 @@ export async function POST(request: NextRequest) {
       ownerId: user.id,
     },
   });
+  
+  // Трекинг активности
+  await trackActivity(user.id, "journal_entry_created", "journal", idea.id);
+  
   return NextResponse.json(idea, { status: 201 });
 }

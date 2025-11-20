@@ -51,9 +51,11 @@ export async function GET() {
         }
       }
     } catch (dbError: any) {
-      // Обрабатываем ошибки подключения к БД gracefully
-      // Error code 14 означает, что файл БД не найден или недоступен
-      if (dbError?.code === "P1001" || dbError?.message?.includes("Error code 14") || dbError?.message?.includes("Unable to open the database file")) {
+      // Обрабатываем ошибки подключения к PostgreSQL
+      if (dbError?.code === "P1001" || dbError?.code === "P1000" || 
+          dbError?.message?.includes("Can't reach database server") ||
+          dbError?.message?.includes("Connection refused") ||
+          dbError?.message?.includes("timeout")) {
         // БД еще не создана или недоступна - это нормально при первом запуске
         health.status = "unhealthy";
         health.services.database = "error";

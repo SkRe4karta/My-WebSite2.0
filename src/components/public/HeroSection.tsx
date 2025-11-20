@@ -17,7 +17,7 @@ export default function HeroSection() {
   const translateY = useTransform(scrollYProgress, [0, 1], [0, 40]);
 
   return (
-    <section id="hero" ref={ref} className="relative isolate overflow-hidden">
+    <section id="hero" ref={ref} className="relative isolate overflow-hidden w-full">
       <motion.div aria-hidden style={{ translateY }} className="absolute inset-0 pointer-events-none">
         <div className="absolute inset-0 bg-[#1e1e1e]" />
       </motion.div>
@@ -31,18 +31,12 @@ export default function HeroSection() {
           <p className="mt-4 sm:mt-6 max-w-2xl text-sm sm:text-base text-[#cccccc] md:text-lg text-center md:text-left">
             Учусь на втором курсе (c 2024 года) и собираю свой личный инструментарий: публичную визитку и
             приватный кабинет для проектов, заметок и учебных идей. Всё это написано на Next.js + Tailwind,
-            хранится на SQLite и разворачивается на Ubuntu-сервере.
+            хранится в PostgreSQL и разворачивается на Ubuntu-сервере.
           </p>
           <div className="mt-6 sm:mt-10 flex flex-wrap gap-3 sm:gap-4 justify-center md:justify-start">
             <Link
-              href="/projects"
-              className="rounded-xl bg-[#4CAF50] px-8 sm:px-12 py-3 sm:py-4 text-sm sm:text-base font-semibold text-white transition-all duration-300 hover:bg-[#45a049] hover:shadow-[0_0_20px_rgba(76,175,80,0.5)] active:scale-95 min-w-[140px] sm:min-w-[160px] text-center"
-            >
-              Проекты
-            </Link>
-            <Link
               href="/about"
-              className="rounded-xl border-2 border-[#4CAF50] px-8 sm:px-12 py-3 sm:py-4 text-sm sm:text-base font-semibold text-white transition-all duration-300 hover:bg-[#4CAF50]/20 hover:border-[#45a049] hover:shadow-[0_0_15px_rgba(76,175,80,0.3)] active:scale-95 min-w-[140px] sm:min-w-[160px] text-center"
+              className="rounded-xl bg-[#4CAF50] px-8 sm:px-12 py-3 sm:py-4 text-sm sm:text-base font-semibold text-white transition-all duration-300 hover:bg-[#45a049] hover:shadow-[0_0_20px_rgba(76,175,80,0.5)] active:scale-95 min-w-[140px] sm:min-w-[160px] text-center"
             >
               Обо мне
             </Link>

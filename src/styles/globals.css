@@ -1,4 +1,6 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 :root {
   color-scheme: dark;
@@ -71,6 +73,48 @@
   --transition-fast: 150ms ease;
   --transition-base: 300ms ease;
   --transition-slow: 500ms ease;
+}
+
+/* Светлая тема */
+:root[data-theme="light"],
+:root.light {
+  color-scheme: light;
+  
+  /* Фон */
+  --background: #f5f5f5;
+  
+  /* Поверхности */
+  --surface: #ffffff;
+  --surface-muted: #f0f0f0;
+  --card: #ffffff;
+  
+  /* Зелёные акценты */
+  --accent: #4CAF50;
+  --accent-bright: #45a049;
+  --accent-strong: #388e3c;
+  --accent-soft: rgba(76, 175, 80, 0.1);
+  --accent-glow: rgba(76, 175, 80, 0.15);
+  
+  /* Текст */
+  --text: #1a1a1a;
+  --text-bright: #000000;
+  --text-muted: #666666;
+  --text-dim: #888888;
+  
+  /* Границы */
+  --border: rgba(76, 175, 80, 0.2);
+  --border-hover: rgba(76, 175, 80, 0.4);
+  --border-strong: rgba(76, 175, 80, 0.3);
+  
+  /* Тени */
+  --shadow-glow: 0 20px 60px rgba(76, 175, 80, 0.1);
+  --shadow-glow-strong: 0 10px 40px rgba(76, 175, 80, 0.15);
+  
+  /* Состояния */
+  --error: #d32f2f;
+  --error-bg: rgba(211, 47, 47, 0.1);
+  --success: #4CAF50;
+  --success-bg: rgba(76, 175, 80, 0.1);
 }
 
 * {

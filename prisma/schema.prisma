@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -24,6 +24,15 @@ model User {
   journalIdeas   IdeaEntry[]
   settings       UserSetting?
   performedAudits VaultAudit[] @relation("AuditActor")
+  noteTemplates  NoteTemplate[]
+  tasks          Task[]
+  reminders      Reminder[]
+  backups        Backup[]
+  apiKeys        ApiKey[]
+  favorites      Favorite[]
+  activityLogs   ActivityLog[]
+  sharedNotes    NoteShare[]   @relation("SharedWith")
+  webhooks       Webhook[]
 }
 
 model Account {
@@ -78,6 +87,8 @@ model Note {
   featured    Boolean       @default(false)
   ownerId     String
   owner       User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  versions    NoteVersion[]
+  shares      NoteShare[]
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 }
@@ -205,4 +216,160 @@ model SecurityAudit {
   @@index([userId])
   @@index([createdAt])
   @@index([action])
+}
+
+// Версионирование заметок
+model NoteVersion {
+  id        String   @id @default(cuid())
+  noteId    String
+  title     String
+  content   String
+  version   Int
+  createdAt DateTime @default(now())
+  note      Note     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  @@unique([noteId, version])
+}
+
+// Шаблоны заметок
+model NoteTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  content     String
+  description String?
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+}
+
+// Совместный доступ к заметкам
+model NoteShare {
+  id          String   @id @default(cuid())
+  noteId      String
+  sharedWithId String
+  permission  String   @default("READ") // READ, WRITE
+  note        Note     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  sharedWith  User     @relation("SharedWith", fields: [sharedWithId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  @@unique([noteId, sharedWithId])
+}
+
+// Аналитика и активность
+model ActivityLog {
+  id          String   @id @default(cuid())
+  userId      String
+  action      String   // "note_created", "file_uploaded", etc.
+  entityType  String?  // "note", "file", "vault"
+  entityId    String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, createdAt])
+  @@index([action])
+}
+
+// Задачи
+model Task {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  dueDate     DateTime?
+  completed   Boolean  @default(false)
+  priority    String   @default("MEDIUM") // LOW, MEDIUM, HIGH
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@index([ownerId, completed])
+  @@index([dueDate])
+}
+
+// Напоминания
+model Reminder {
+  id          String   @id @default(cuid())
+  taskId     String?
+  noteId     String?
+  message     String
+  triggerAt   DateTime
+  completed   Boolean  @default(false)
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  @@index([ownerId, triggerAt])
+  @@index([completed])
+}
+
+// Бэкапы
+model Backup {
+  id          String   @id @default(cuid())
+  type        String   // "manual", "scheduled", "auto"
+  status      String   // "pending", "running", "completed", "failed"
+  filePath    String?
+  size        Int?
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+  @@index([ownerId, createdAt])
+}
+
+// API ключи
+model ApiKey {
+  id          String   @id @default(cuid())
+  name        String
+  key         String   @unique
+  permissions Json     // массив разрешений
+  lastUsedAt  DateTime?
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+  @@index([key])
+}
+
+// Избранное
+model Favorite {
+  id          String   @id @default(cuid())
+  entityType  String   // "note", "file", "vault"
+  entityId    String
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  @@unique([ownerId, entityType, entityId])
+}
+
+// Проекты для портфолио
+model Project {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String   @unique
+  description String
+  status      String   // "live", "development", "archived"
+  stack       Json     // массив технологий
+  githubUrl   String?
+  demoUrl     String?
+  imageUrl    String?
+  featured    Boolean  @default(false)
+  order       Int      @default(0)
+  metadata    Json?    // дополнительные данные
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@index([slug])
+  @@index([status])
+  @@index([featured])
+}
+
+// Webhooks
+model Webhook {
+  id           String   @id @default(cuid())
+  name         String
+  url          String
+  event        String   // тип события
+  secret       String?
+  isActive     Boolean  @default(true)
+  ownerId      String
+  owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  lastTriggered DateTime?
+  @@index([ownerId])
+  @@index([event])
 }

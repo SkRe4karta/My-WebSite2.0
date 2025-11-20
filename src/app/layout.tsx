@@ -44,7 +44,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ru">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-color-background text-color-text flex flex-col min-h-screen`}>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[var(--background)] text-[var(--text)] flex flex-col min-h-screen w-full overflow-x-hidden`}>
         <Providers>
           <ConditionalLayout>{children}</ConditionalLayout>
         </Providers>

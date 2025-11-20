@@ -2,13 +2,13 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 import Sidebar from "@/components/admin/Sidebar";
 import SearchBar from "@/components/admin/SearchBar";
+import KeyboardShortcutsHelp from "@/components/admin/KeyboardShortcutsHelp";
 import Link from "next/link";
-import { authOptions } from "@/lib/auth";
-import { getServerSession } from "next-auth/next";
+import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session) {
     redirect("/login");
   }
@@ -32,6 +32,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           </section>
         </div>
       </div>
+      <KeyboardShortcutsHelp />
     </div>
   );
 }

@@ -3,6 +3,11 @@
 import { useState, useEffect } from "react";
 import DraggableDashboard from "@/components/admin/DraggableDashboard";
 import Link from "next/link";
+import AnalyticsDashboard from "@/components/admin/AnalyticsDashboard";
+import TaskManager from "@/components/admin/TaskManager";
+import RemindersPanel from "@/components/admin/RemindersPanel";
+import FavoritesPanel from "@/components/admin/FavoritesPanel";
+import KeyboardShortcutsHelp from "@/components/admin/KeyboardShortcutsHelp";
 
 type Widget = {
   id: string;
@@ -83,7 +88,7 @@ export default function AdminDashboard() {
               content: (
                 <div className="text-sm text-[#cccccc]">
                   <p>Создайте заметку или идею — всё синхронизируется автоматически.</p>
-                  <p className="mt-2">Все данные хранятся локально: SQLite + storage/uploads + storage/vault.</p>
+                  <p className="mt-2">Все данные хранятся в PostgreSQL + storage/uploads + storage/vault.</p>
                 </div>
               ),
             };
@@ -147,6 +152,34 @@ export default function AdminDashboard() {
         height: 350,
         visible: true,
         content: createStatsContent(stats),
+      },
+      {
+        id: "analytics",
+        title: "Аналитика",
+        height: 400,
+        visible: true,
+        content: <AnalyticsDashboard />,
+      },
+      {
+        id: "tasks",
+        title: "Задачи",
+        height: 500,
+        visible: true,
+        content: <TaskManager />,
+      },
+      {
+        id: "reminders",
+        title: "Напоминания",
+        height: 400,
+        visible: true,
+        content: <RemindersPanel />,
+      },
+      {
+        id: "favorites",
+        title: "Избранное",
+        height: 300,
+        visible: true,
+        content: <FavoritesPanel />,
       },
       {
         id: "quick-actions",

@@ -3,14 +3,18 @@
 import { useEffect, useState } from "react";
 import TwoFactorAuth from "./TwoFactorAuth";
 import UserManagement from "./UserManagement";
+import ApiKeysManager from "./ApiKeysManager";
+import { useTheme } from "@/components/shared/ThemeProvider";
 
 type Settings = {
   enableAnimations?: boolean;
   backupTarget?: string | null;
+  theme?: string;
 };
 
 export default function SettingsPanel() {
-  const [settings, setSettings] = useState<Settings>({ enableAnimations: true });
+  const { theme, setTheme } = useTheme();
+  const [settings, setSettings] = useState<Settings>({ enableAnimations: true, theme: "dark" });
   const [passwordForm, setPasswordForm] = useState({
     oldPassword: "",
     newPassword: "",
@@ -22,14 +26,21 @@ export default function SettingsPanel() {
   useEffect(() => {
     fetch("/api/settings")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => data && setSettings(data));
-  }, []);
+      .then((data) => {
+        if (data) {
+          setSettings(data);
+          if (data.theme) {
+            setTheme(data.theme as "light" | "dark");
+          }
+        }
+      });
+  }, [setTheme]);
 
   async function save() {
     await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings),
+      body: JSON.stringify({ ...settings, theme }),
     });
   }
 
@@ -66,6 +77,21 @@ export default function SettingsPanel() {
         <div className="glass-panel border border-[#4CAF50]/40 p-4 sm:p-6">
           <h2 className="text-lg font-semibold text-[#4CAF50] mb-6">Настройки</h2>
           <div className="space-y-6">
+            <div>
+              <label className="text-xs uppercase tracking-[0.4em] text-[#cccccc] mb-2 block">Тема</label>
+              <select
+                className="w-full rounded-xl border border-[#4CAF50]/40 bg-[#333] px-4 py-2.5 pr-10 text-white transition-all duration-300 hover:border-[#4CAF50]/60 focus:border-[#4CAF50] focus:outline-none appearance-none cursor-pointer bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%234CAF50%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpolyline points=%226 9 12 15 18 9%22%3E%3C/polyline%3E%3C/svg%3E')] bg-no-repeat bg-right bg-[length:20px] [background-position-x:calc(100%-12px)]"
+                value={theme}
+                onChange={(e) => {
+                  const newTheme = e.target.value as "light" | "dark";
+                  setTheme(newTheme);
+                  setSettings({ ...settings, theme: newTheme });
+                }}
+              >
+                <option value="dark">Тёмная</option>
+                <option value="light">Светлая</option>
+              </select>
+            </div>
             <div>
               <label className="text-xs uppercase tracking-[0.4em] text-[#cccccc] mb-2 block">Анимации</label>
               <select
@@ -151,10 +177,11 @@ export default function SettingsPanel() {
         </div>
       </div>
       
-      {/* Правая колонка - Двухфакторка и Управление пользователями */}
+      {/* Правая колонка - Двухфакторка, Управление пользователями и API ключи */}
       <div className="space-y-6">
         <TwoFactorAuth />
         <UserManagement />
+        <ApiKeysManager />
       </div>
     </div>
   );

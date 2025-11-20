@@ -8,7 +8,7 @@ const contacts = [
 
 export default function ContactSection() {
   return (
-    <section className="glass-panel grid gap-6 p-4 sm:p-6 md:p-8 text-white md:grid-cols-2">
+    <section className="glass-panel grid gap-6 p-4 sm:p-6 md:p-8 text-white md:grid-cols-2 w-full">
       <div>
         <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-[#4CAF50] mb-4 sm:mb-5">Контакты</h2>
         <p className="mt-4 text-base sm:text-lg text-[#cccccc]">

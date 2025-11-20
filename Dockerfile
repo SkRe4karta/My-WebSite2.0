@@ -1,122 +1,67 @@
-# ============================================
-# Multi-stage Dockerfile for Next.js + Prisma
-# Optimized for production with minimal image size
-# ============================================
-
-# Base stage with system dependencies
-FROM node:20-slim AS base
+# Stage 1: Dependencies
+FROM node:18-alpine AS deps
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-# Install only essential system packages
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    openssl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# ============================================
-# Dependencies stage
-# ============================================
-FROM base AS deps
-
-# Copy package files first for better layer caching
 COPY package.json package-lock.json* ./
+RUN npm ci
 
-# Install dependencies with optimizations
-RUN npm ci --legacy-peer-deps --ignore-scripts --prefer-offline --no-audit && \
-    npm cache clean --force
+# Stage 2: Builder
+FROM node:18-alpine AS builder
+RUN apk add --no-cache libc6-compat openssl
+WORKDIR /app
 
-# Copy Prisma schema and generate client
-COPY prisma ./prisma
-ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
-ENV PRISMA_GENERATE_SKIP_AUTOINSTALL=1
+# Copy package files
+COPY package.json package-lock.json* ./
+RUN npm ci
 
-# Generate Prisma Client with retry mechanism
-RUN for i in 1 2 3 4; do \
-    npx prisma@6.19.0 generate --schema=./prisma/schema.prisma && break || \
-    (echo "Prisma generate attempt $i failed, retrying..." && sleep $((i * 5))); \
-    done
-
-# ============================================
-# Builder stage
-# ============================================
-FROM base AS builder
-
-# Copy node_modules from deps stage
+# Copy source code
 COPY --from=deps /app/node_modules ./node_modules
-
-# Fix permissions for node_modules binaries (critical fix)
-RUN chmod -R +x node_modules/.bin 2>/dev/null || true
-
-# Copy application source code
 COPY . .
 
-# Проверяем наличие скриптов (для отладки)
-RUN if [ -d "scripts" ]; then \
-        echo "✅ scripts directory found"; \
-        ls -la scripts/ || true; \
-        chmod +x scripts/*.js 2>/dev/null || true; \
-    else \
-        echo "⚠️  WARNING: scripts directory not found!"; \
-        mkdir -p scripts; \
-    fi
+# Generate Prisma Client
+RUN npx prisma generate
 
-# Build environment variables
-ENV DATABASE_URL="file:/app/database/db.sqlite"
+# Build Next.js
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
 ENV NODE_ENV=production
-
-# Build Next.js application
 RUN npm run build
 
-# ============================================
-# Production runner stage
-# ============================================
-FROM base AS runner
+# Stage 3: Runner
+FROM node:18-alpine AS runner
+WORKDIR /app
 
-# Set production environment
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# Copy necessary files
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/scripts ./scripts
+
+# Create storage directories
+RUN mkdir -p storage/uploads storage/vault storage/backups && \
+    chown -R nextjs:nodejs /app && \
+    chmod -R 755 storage/uploads storage/backups && \
+    chmod -R 700 storage/vault
+
+# Install wget for healthcheck
+RUN apk add --no-cache wget
+
+USER nextjs
+
+EXPOSE 3000
+
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-WORKDIR /app
-
-# Create non-root user for security
-RUN groupadd --system --gid 1001 nodejs && \
-    useradd --system --uid 1001 nextjs
-
-# Copy built application from builder
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
-
-# Копируем скрипты (обязательно для работы npm run db:init-admin)
-COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
-
-# Проверяем, что скрипты скопированы
-RUN if [ -f "scripts/init-admin.js" ] && [ -f "scripts/check-auth.js" ]; then \
-        echo "✅ Скрипты успешно скопированы"; \
-        chmod +x scripts/*.js; \
-    else \
-        echo "❌ ОШИБКА: Скрипты не найдены!"; \
-        ls -la scripts/ 2>/dev/null || echo "Директория scripts не существует"; \
-        exit 1; \
-    fi
-
-# Switch to non-root user
-USER nextjs
-
-# Expose port
-EXPOSE 3000
-
-# Healthcheck for container orchestration
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
-
-# Start the application
 CMD ["node", "server.js"]
+

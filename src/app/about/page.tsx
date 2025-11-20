@@ -1,7 +1,7 @@
 import AboutSection from "@/components/public/AboutSection";
 
 const skills = {
-  dev: ["Next.js", "TypeScript", "Node.js", "Prisma", "SQLite", "Docker"],
+  dev: ["Next.js", "TypeScript", "Node.js", "Prisma", "PostgreSQL", "Docker"],
   design: ["Figma", "After Effects", "Notion", "Parallax", "Design systems"],
 };
 

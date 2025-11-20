@@ -1,10 +1,9 @@
 import { NextRequest } from "next/server";
-import { authOptions } from "@/lib/auth";
-import { getServerSession } from "next-auth/next";
+import { auth } from "@/lib/auth";
 import { assertRateLimit } from "@/lib/rate-limit";
 
 export async function requireUser(request: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session?.user?.id) {
     throw new Error("UNAUTHORIZED");
   }

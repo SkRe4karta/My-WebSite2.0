@@ -1,63 +1,117 @@
 "use client";
 
-import Link from "next/link";
-import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
+import ProjectCard from "./ProjectCard";
+import ProjectFilters from "./ProjectFilters";
 
-const showcase = [
-  {
-    title: "Личный кабинет",
-    status: "v1.0 release candidate",
-    stack: ["Next.js", "SQLite", "Docker"],
-    description: "Приватная админка с файловым хранилищем, заметками и журналом идей.",
-  },
-  {
-    title: "zelyonkin.ru",
-    status: "live",
-    stack: ["Tailwind", "Framer Motion"],
-    description: "Публичная визитка с лёгкой темой, быстрой навигацией и контактами.",
-  },
-  {
-    title: "UI playground",
-    status: "R&D",
-    stack: ["Figma", "Three.js"],
-    description: "Эксперименты с иллюстрациями и мини-анимациями для будущих разделов.",
-  },
-];
+type Project = {
+  id: string;
+  title: string;
+  slug: string;
+  description: string;
+  status: string;
+  stack: string[];
+  githubUrl?: string;
+  demoUrl?: string;
+  imageUrl?: string;
+  featured: boolean;
+};
 
 export default function ProjectsSection() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [filteredProjects, setFilteredProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/projects")
+      .then((res) => res.json())
+      .then((data) => {
+        // Проверяем, что data - массив, а не объект с ошибкой
+        if (!Array.isArray(data)) {
+          console.error("API returned non-array data:", data);
+          setProjects([]);
+          setFilteredProjects([]);
+          setLoading(false);
+          return;
+        }
+        
+        // Убеждаемся, что stack всегда массив
+        const formattedData = data.map((project: any) => {
+          let stackArray: string[] = [];
+          if (Array.isArray(project.stack)) {
+            stackArray = project.stack;
+          } else if (typeof project.stack === 'string') {
+            try {
+              stackArray = JSON.parse(project.stack);
+            } catch {
+              stackArray = [];
+            }
+          } else if (project.stack && typeof project.stack === 'object') {
+            stackArray = Object.values(project.stack) as string[];
+          }
+          
+          return {
+            ...project,
+            stack: stackArray,
+          };
+        });
+        setProjects(formattedData);
+        setFilteredProjects(formattedData);
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error("Failed to load projects:", err);
+        setProjects([]);
+        setFilteredProjects([]);
+        setLoading(false);
+      });
+  }, []);
+
+  if (loading) {
+    return (
+      <section id="projects" className="relative space-y-8">
+        <div>
+          <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-[#4CAF50] text-center mb-4 sm:mb-5">Проекты</h2>
+        </div>
+        <div className="text-center text-[#cccccc]">Загрузка...</div>
+      </section>
+    );
+  }
+
   return (
     <section id="projects" className="relative space-y-8">
       <div>
         <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-[#4CAF50] text-center mb-4 sm:mb-5">Проекты</h2>
       </div>
 
-      <div className="grid gap-4 sm:gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {showcase.map((project, index) => (
-          <motion.article
-            key={project.title}
-            initial={{ opacity: 0, y: 24 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, amount: 0.4 }}
-            transition={{ duration: 0.5, delay: index * 0.08 }}
-            className="glass-panel flex flex-col justify-between border border-[#4CAF50]/40 p-4 sm:p-6 hover:transform hover:-translate-y-3 hover:border-[#4CAF50]/60 hover:bg-[#444] transition-all duration-300"
-          >
-            <div>
-              <div className="flex items-center justify-between text-sm text-[#cccccc]">
-                <span className="font-medium">{project.status}</span>
-                <span className="text-[#cccccc]">{project.stack.join(" · ")}</span>
-              </div>
-              <h3 className="mt-4 text-xl font-bold text-[#4CAF50]">{project.title}</h3>
-              <p className="mt-3 text-[#cccccc]">{project.description}</p>
-            </div>
-            <Link
-              href="/projects"
-              className="mt-6 inline-flex items-center text-sm font-bold text-[#4CAF50] transition-all duration-300 hover:text-[#45a049] hover:gap-2"
-            >
-              Подробнее →
-            </Link>
-          </motion.article>
-        ))}
+      {/* Описание секции проектов */}
+      <div className="glass-panel p-6 md:p-8 text-white">
+        <p className="text-base sm:text-lg text-[#cccccc] mb-4">
+          Ниже представлен текущий проект — <strong className="text-[#4CAF50]">My-WebSite 2.0</strong>. 
+          Это современный веб-сайт-портфолио с публичной и приватной частями, включающий систему управления 
+          заметками, файлами, идеями и проектами. Реализована аутентификация с двухфакторной защитой, 
+          система бэкапов, API для интеграций и многое другое.
+        </p>
+        <p className="text-base sm:text-lg text-[#cccccc]">
+          <strong className="text-[#4CAF50]">Следующие проекты находятся в разработке</strong> и будут добавлены по мере готовности.
+        </p>
       </div>
+
+      {projects.length > 0 && (
+        <ProjectFilters projects={projects} onFilterChange={setFilteredProjects} />
+      )}
+
+      {filteredProjects.length > 0 ? (
+        <div className="grid gap-4 sm:gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {filteredProjects.map((project, index) => (
+            <ProjectCard key={project.id} project={project} index={index} />
+          ))}
+        </div>
+      ) : (
+        <div className="text-center text-[#cccccc] py-8">
+          {projects.length === 0 ? "Проекты пока не добавлены" : "Нет проектов, соответствующих фильтрам"}
+        </div>
+      )}
     </section>
   );
 }

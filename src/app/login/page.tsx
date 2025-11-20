@@ -30,9 +30,9 @@ function LoginForm() {
       const res = await signIn("credentials", {
         ...data,
         redirect: false,
-      });
+      }) as { error?: string } | undefined;
       if (res?.error) {
-        const errorString = typeof res.error === "string" ? res.error : String(res.error);
+        const errorString = res.error;
         if (errorString === "2FA_REQUIRED") {
           setRequires2FA(true);
           setError(null);

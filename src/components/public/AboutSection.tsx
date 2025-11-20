@@ -8,7 +8,7 @@ const intro = `Я учусь во втором семестре Московск
 
 export default function AboutSection() {
   return (
-    <section id="about" className="relative grid gap-8 sm:gap-12 lg:grid-cols-[1.1fr_0.9fr]">
+    <section id="about" className="relative grid gap-8 sm:gap-12 lg:grid-cols-[1.1fr_0.9fr] w-full">
       <div className="glass-panel p-4 sm:p-6 md:p-8 text-white">
         <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-[#4CAF50] mb-4 sm:mb-5">Обо мне</h2>
         <p className="text-xl sm:text-2xl text-[#cccccc] mb-3 sm:mb-4 font-bold">Дмитрий Зелёнкин</p>

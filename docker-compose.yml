@@ -1,82 +1,62 @@
+version: '3.8'
+
 services:
-  web:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mywebsite-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mywebsite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-mywebsite}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mywebsite-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mywebsite}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: portfolio_web
+    container_name: mywebsite-app
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mywebsite}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-mywebsite}?schema=public
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-https://zelyonkin.ru}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-zelyonkin.d@gmail.com}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-skre4karta}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      NODE_ENV: production
     env_file:
       - .env
-    environment:
-      - NODE_ENV=production
-      # ВАЖНО: DATABASE_URL переопределяется здесь для гарантии использования абсолютного пути
-      # Это переопределяет значение из .env файла, если там указан относительный путь
-      # Абсолютный путь необходим для правильной работы Prisma в Docker контейнере
-      - DATABASE_URL=file:/app/database/db.sqlite
     volumes:
-      # Persistent data volumes
-      - ./database:/app/database
       - ./storage:/app/storage
+      - ./prisma:/app/prisma
     networks:
-      - portfolio_network
-    restart: unless-stopped
+      - mywebsite-network
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-    labels:
-      - "com.zelyonkin.service=web"
-      - "com.zelyonkin.version=2.2.0"
-    # Resource limits (optional, uncomment if needed)
-    # deploy:
-    #   resources:
-    #     limits:
-    #       cpus: '1.0'
-    #       memory: 1G
-    #     reservations:
-    #       cpus: '0.5'
-    #       memory: 512M
-
-  nginx:
-    image: nginx:1.27-alpine
-    container_name: portfolio_nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./certbot:/etc/letsencrypt:ro
-      - ./certbot/www:/var/www/certbot:ro
-    networks:
-      - portfolio_network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "--timeout=5", "http://localhost/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
-    labels:
-      - "com.zelyonkin.service=nginx"
-      - "com.zelyonkin.version=1.27"
+      start_period: 40s
 
-  certbot:
-    image: certbot/certbot:latest
-    container_name: portfolio_certbot
-    volumes:
-      - ./certbot:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
-    entrypoint: "/bin/sh"
-    command: "-c 'trap exit TERM; while true; do certbot renew; sleep 12h & wait $!; done'"
-    networks:
-      - portfolio_network
-    restart: unless-stopped
-    labels:
-      - "com.zelyonkin.service=certbot"
-    # Certbot runs in background, no healthcheck needed
+volumes:
+  postgres_data:
+    driver: local
 
 networks:
-  portfolio_network:
+  mywebsite-network:
     driver: bridge
-    name: portfolio_network
+

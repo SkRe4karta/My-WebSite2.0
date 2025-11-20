@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/api";
 import { filePayload } from "@/lib/validators";
 import { toRelative, writeFileFromBuffer } from "@/lib/storage";
+import { trackActivity } from "@/lib/analytics/tracker";
 
 export async function GET(request: NextRequest) {
   const user = await requireUser(request);
@@ -83,6 +84,10 @@ export async function POST(request: NextRequest) {
         ownerId: user.id,
       },
     });
+    
+    // Трекинг активности
+    await trackActivity(user.id, "file_uploaded", "file", entry.id);
+    
     return NextResponse.json(entry, { status: 201 });
   }
 
@@ -97,5 +102,9 @@ export async function POST(request: NextRequest) {
       path: payload.isFolder ? `folder://${crypto.randomUUID()}` : "",
     },
   });
+  
+  // Трекинг активности
+  await trackActivity(user.id, payload.isFolder ? "folder_created" : "file_created", "file", entry.id);
+  
   return NextResponse.json(entry, { status: 201 });
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/api";
 import { notePayload } from "@/lib/validators";
+import { trackActivity } from "@/lib/analytics/tracker";
 
 export async function GET(request: NextRequest) {
   const user = await requireUser(request);
@@ -52,6 +53,9 @@ export async function POST(request: NextRequest) {
     where: { id: note.id },
     include: { tags: { include: { tag: true } }, attachments: { include: { file: true } } },
   });
+
+  // Трекинг активности
+  await trackActivity(user.id, "note_created", "note", note.id);
 
   return NextResponse.json(full, { status: 201 });
 }

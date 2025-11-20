@@ -4,25 +4,65 @@ import { hashPassword, isBcryptHash, verifyPassword } from "./password";
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 // Валидация DATABASE_URL при инициализации
-const databaseUrl = process.env.DATABASE_URL;
+// Не бросаем ошибку при сборке - только при реальном использовании
+let databaseUrl = process.env.DATABASE_URL;
+
+// Определяем, находимся ли мы в режиме сборки
+// Проверяем различные признаки режима сборки Next.js
+const isBuildPhase = 
+  process.env.NEXT_PHASE === "phase-production-build" || 
+  process.env.NEXT_PHASE === "phase-development-build" ||
+  process.env.__NEXT_PRIVATE_PREBUNDLED_REACT !== undefined ||
+  (typeof process.env.NEXT_RUNTIME === "undefined" && 
+   process.env.NODE_ENV === "production" &&
+   !process.env.PORT);
+
+// Определяем dev режим
+const isDevMode = process.env.NODE_ENV === "development" || process.env.NODE_ENV !== "production";
+
+// Если DATABASE_URL не установлен
 if (!databaseUrl) {
-  console.error("❌ ОШИБКА: DATABASE_URL не установлен в переменных окружения");
-  throw new Error("DATABASE_URL must be set in environment variables");
+  if (isBuildPhase) {
+    // Во время сборки используем временный PostgreSQL URL
+    // Это нужно для статической генерации страниц
+    databaseUrl = "postgresql://user:password@localhost:5432/build_db?schema=public";
+    process.env.DATABASE_URL = databaseUrl;
+  } else if (isDevMode) {
+    // В dev режиме используем временный URL, но выводим предупреждение
+    // Ошибка будет выброшена только при реальном использовании БД
+    databaseUrl = "postgresql://user:password@localhost:5432/mywebsite?schema=public";
+    process.env.DATABASE_URL = databaseUrl;
+    console.warn("⚠️  DATABASE_URL не установлен. Используется временный URL для dev режима.");
+    console.warn("   Создайте файл .env с DATABASE_URL для подключения к реальной БД.");
+  } else {
+    // В production выбрасываем ошибку
+    throw new Error(
+      "DATABASE_URL не установлен. Установите переменную окружения DATABASE_URL с PostgreSQL connection string.\n" +
+      "Пример: postgresql://user:password@localhost:5432/mywebsite?schema=public"
+    );
+  }
 }
 
-// Проверяем, что используется абсолютный путь для SQLite
-if (databaseUrl.startsWith("file:") && databaseUrl.includes("./")) {
-  console.warn("⚠️  ПРЕДУПРЕЖДЕНИЕ: DATABASE_URL использует относительный путь");
-  console.warn(`   Текущий путь: ${databaseUrl}`);
-  console.warn("   Рекомендуется использовать абсолютный путь: file:/app/database/db.sqlite");
-  console.warn("   Это может привести к ошибкам подключения к БД в Docker контейнере");
+// Проверяем, что используется PostgreSQL (только если URL установлен)
+if (databaseUrl && !databaseUrl.startsWith("postgresql://") && !databaseUrl.startsWith("postgres://")) {
+  throw new Error(
+    "DATABASE_URL должен использовать PostgreSQL. " +
+    "SQLite больше не поддерживается. " +
+    `Текущий URL: ${databaseUrl.substring(0, 30)}...`
+  );
 }
 
-// Создаем Prisma Client с обработкой ошибок подключения
-// Используем ленивую инициализацию - не подключаемся к БД при создании
+// Используем databaseUrl для Prisma Client
+const dbUrl = databaseUrl;
+
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
+    datasources: {
+      db: {
+        url: dbUrl,
+      },
+    },
     // В production отключаем логирование ошибок, чтобы не засорять логи ошибками подключения
     // Ошибки подключения (Error code 14) обрабатываются через ensureConnection()
     log: process.env.NODE_ENV === "production" 
@@ -50,20 +90,33 @@ export async function ensureConnection(): Promise<boolean> {
     connectionError = error instanceof Error ? error : new Error(errorMessage);
     connectionAttempted = true;
     
-    // Не выбрасываем ошибку при Error code 14 - это нормально при первом запуске
-    if (errorMessage.includes("Error code 14") || errorMessage.includes("Unable to open the database file")) {
-      // Это нормально при первом запуске - БД еще не создана
-      // Не логируем как ошибку, только как информационное сообщение
-      // (логирование происходит только один раз при первом вызове)
+    // Обработка ошибок подключения PostgreSQL
+    if (errorMessage.includes("P1001") || 
+        errorMessage.includes("Can't reach database server") ||
+        errorMessage.includes("Connection refused") ||
+        errorMessage.includes("timeout")) {
+      // База данных недоступна
       if (!connectionError.message.includes("logged")) {
-        console.log("ℹ️  БД еще не создана (это нормально при первом запуске). Подключение будет повторено при первом запросе.");
+        if (isDevMode) {
+          console.error("❌ ОШИБКА: База данных PostgreSQL недоступна!");
+          console.error("   Для работы в dev режиме:");
+          console.error("   1. Установите PostgreSQL локально или используйте Docker");
+          console.error("   2. Создайте файл .env в корне проекта");
+          console.error("   3. Добавьте в .env: DATABASE_URL=\"postgresql://user:password@localhost:5432/mywebsite?schema=public\"");
+          console.error("   4. Или используйте Docker Compose: docker-compose up -d postgres");
+        } else {
+          console.log("ℹ️  База данных PostgreSQL недоступна. Убедитесь, что PostgreSQL запущен и доступен.");
+        }
         connectionError.message += " (logged)";
       }
-      return false; // Возвращаем false, но не выбрасываем ошибку
+      return false;
     } else {
       // Другие ошибки логируем как предупреждение
-      console.warn("⚠️  Предупреждение: не удалось подключиться к БД:", errorMessage);
-      // Для других ошибок можно выбрасывать исключение, если нужно
+      if (isDevMode) {
+        console.error("❌ ОШИБКА подключения к БД:", errorMessage);
+      } else {
+        console.warn("⚠️  Предупреждение: не удалось подключиться к БД:", errorMessage);
+      }
       return false;
     }
   }

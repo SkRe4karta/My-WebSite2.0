@@ -11,7 +11,6 @@ const links = [
   { href: "/admin/files", label: "Файлы" },
   { href: "/admin/vault", label: "Важные" },
   { href: "/admin/journal", label: "Календарь" },
-  { href: "/admin/audit", label: "Аудит" },
   { href: "/admin/settings", label: "Настройки" },
 ];
 
@@ -79,7 +78,7 @@ export default function Sidebar() {
           Выйти
         </button>
         <p className="text-[0.7rem] leading-tight text-[#cccccc]/60">
-          Все данные лежат локально: SQLite + storage/uploads + storage/vault.
+          Все данные хранятся в PostgreSQL + storage/uploads + storage/vault.
         </p>
       </div>
     </aside>
