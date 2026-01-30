@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>skre4karta</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="assets/favicon.ico" sizes="any" />
+</head>
+<body>
+
+
+<header class="header">
+  <div class="container header-inner">
+    <a class="brand" href="index.html">zelyonkin.ru</a>
+    <nav class="nav" aria-label="Навигация">
+      <a href="index.html" class="active">Главная</a>
+      <a href="projects.html" class="">Проекты</a>
+      <a href="about.html" class="">Обо мне</a>
+      <a href="admin.html" class="">Админка</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <div class="container">
+
+    <!-- HERO -->
+    <section class="hero card">
+      <div>
+        <div class="kicker">ZELYONKIN.RU</div>
+        <h1>Привет! Я<br>Дмитрий<br>Зелёнкин.</h1>
+        <p>
+          Учусь на втором курсе (с 2024 года) и собираю свой личный инструментарий:
+          публичную визитку и приватный кабинет для проектов, заметок и учебных идей.
+          Всё это написано на Next.js + Tailwind, хранится на SQLite и разворачивается на Ubuntu‑сервере.
+        </p>
+
+        <div class="actions">
+          <a class="btn primary" href="projects.html">Проекты</a>
+          <a class="btn outline" href="about.html">Обо мне</a>
+        </div>
+
+        <hr class="divider" />
+
+        <div class="stats">
+          <div class="stat card soft">
+            <div class="label">СТАТУС</div>
+            <div class="value">Студент 2 курса</div>
+          </div>
+          <div class="stat card soft">
+            <div class="label">ФОРМАТ</div>
+            <div class="value">Web + UI</div>
+          </div>
+          <div class="stat card soft">
+            <div class="label">ГОРОД</div>
+            <div class="value">Москва</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="photo-frame">
+        <!-- Поменяй файл в assets/ на свой, оставив имя как здесь -->
+        <img src="assets/hero-photo.png" alt="Фото/картинка" />
+      </div>
+    </section>
+
+    <!-- Projects preview -->
+    <section class="section">
+      <h2 class="h1-green">Проекты</h2>
+
+      <div class="grid-3">
+        <article class="card">
+          <div class="project-top">
+            <span>v1.0 release candidate</span><span>Next.js · SQLite · Docker</span>
+          </div>
+          <div class="project-title">Личный кабинет</div>
+          <p class="project-desc">
+            Приватная админка с файловым хранилищем, заметками и журналом идей.
+          </p>
+          <a class="more" href="projects.html">Подробнее</a>
+        </article>
+
+        <article class="card">
+          <div class="project-top">
+            <span>live</span><span>Tailwind · Framer Motion</span>
+          </div>
+          <div class="project-title">zelyonkin.ru</div>
+          <p class="project-desc">
+            Публичная визитка с лёгкой темой, быстрой навигацией и контактами.
+          </p>
+          <a class="more" href="projects.html">Подробнее</a>
+        </article>
+
+        <article class="card">
+          <div class="project-top">
+            <span>R&amp;D</span><span>Figma · Three.js</span>
+          </div>
+          <div class="project-title">UI playground</div>
+          <p class="project-desc">
+            Эксперименты с иллюстрациями и мини‑анимациями для будущих разделов.
+          </p>
+          <a class="more" href="projects.html">Подробнее</a>
+        </article>
+      </div>
+    </section>
+
+    <!-- About preview -->
+    <section class="section">
+      <h2 class="h1-green">Обо мне</h2>
+
+      <div class="about-grid">
+        <div class="about-card card">
+          <h2>Обо мне</h2>
+          <h3>Дмитрий Зелёнкин</h3>
+          <p>
+            Я учусь во втором семестре Московского политеха (поступил в 2024 году)
+            и параллельно собираю свою экосистему инструментов. Этот сайт — единая
+            точка входа: публичная визитка и приватный кабинет для заметок, файлов и
+            сохранения идей.
+          </p>
+        </div>
+
+        <div class="about-image card">
+          <!-- Поменяй картинку в assets/ на свою -->
+          <img src="assets/about-photo.png" alt="Картинка/фото" />
+        </div>
+      </div>
+
+      <div class="contacts card">
+        <div>
+          <h2>Контакты</h2>
+          <p>Мои username в различных сервисах.</p>
+        </div>
+
+        <div class="contact-list">
+          <div class="contact-item">
+            <div class="k">почта</div>
+            <a class="v" href="mailto:zelyonkin.d@gmail.com">zelyonkin.d@gmail.com</a>
+          </div>
+          <div class="contact-item">
+            <div class="k">telegram</div>
+            <a class="v with-icon" href="https://t.me/skre4karta" target="_blank" rel="noopener">
+              <img src="assets/telegram-icon.png" alt="Telegram" />
+              @skre4karta
+            </a>
+          </div>
+          <div class="contact-item">
+            <div class="k">vk</div>
+            <a class="v with-icon" href="https://vk.com/skre4karta" target="_blank" rel="noopener">
+              <img src="assets/vk-icon.png" alt="VK" />
+              vk.com/skre4karta
+            </a>
+          </div>
+          <div class="contact-item">
+            <div class="k">github</div>
+            <a class="v with-icon" href="https://github.com/SkRe4karta" target="_blank" rel="noopener">
+              <img src="assets/github-icon.png" alt="GitHub" />
+              github.com/SkRe4karta
+            </a>
+          </div>
+          <div class="contact-item">
+            <div class="k">leetcode</div>
+            <a class="v" href="https://leetcode.com/u/skre4karta" target="_blank" rel="noopener">leetcode.com/u/skre4karta</a>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-inner">
+      <span class="accent">skre4karta</span> 2025
+    </div>
+  </div>
+</footer>
+
+
+</body>
+</html>
